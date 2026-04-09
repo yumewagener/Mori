@@ -175,6 +175,7 @@ class Executor:
             "--max-turns", str(turns),
             "--allowedTools", allowed,
             "--no-session-persistence",  # each task is independent
+            "--dangerouslySkipPermissions",   # skip file-write approval prompts
         ]
 
         log.info("claude_cli_start", task_id=task["id"], model=model_config.model, turns=turns)

@@ -112,6 +112,59 @@ async def list_messages(session_id: str, request: Request):
     return messages
 
 
+# ─────────────────────────── conversation context builder ────
+
+_MAX_WORDS = 3000      # aprox. 4000 tokens
+_RECENT_KEEP = 8       # mensajes recientes verbatim
+_COMPRESS_LEN = 150    # chars por mensaje en resumen comprimido
+
+
+def _build_chat_context(history: list[dict], current_message: str) -> str:
+    """
+    Construye el prompt con historial de conversación.
+    Estrategia de compresión: mensajes recientes verbatim,
+    mensajes antiguos resumidos a extractos cortos.
+    """
+    # Excluir mensajes sin contenido (asistente vacío mientras streaming)
+    history = [m for m in history if m.get("content", "").strip()]
+
+    if not history:
+        return current_message
+
+    recent = history[-_RECENT_KEEP:]
+    old = history[:-_RECENT_KEEP] if len(history) > _RECENT_KEEP else []
+
+    parts: list[str] = []
+
+    if old:
+        compressed = []
+        for m in old:
+            role = "Usuario" if m["role"] == "user" else "Asistente"
+            text = m["content"][:_COMPRESS_LEN]
+            if len(m["content"]) > _COMPRESS_LEN:
+                text += "…"
+            compressed.append(f"{role}: {text}")
+        parts.append("[Contexto anterior - comprimido]\n" + "\n".join(compressed))
+
+    conv_lines = []
+    for m in recent:
+        role = "Usuario" if m["role"] == "user" else "Asistente"
+        conv_lines.append(f"{role}: {m['content']}")
+    parts.append("[Conversacion reciente]\n" + "\n".join(conv_lines))
+
+    parts.append("[Mensaje actual]\n" + current_message)
+
+    sep = "\n\n"
+    context = sep.join(parts)
+
+    # Si sigue siendo muy largo, quitar el bloque comprimido
+    if len(context.split()) > _MAX_WORDS:
+        parts_short = [p for p in parts if not p.startswith("[Contexto anterior")]
+        context = "[Historial anterior omitido - demasiado largo]\n\n" + sep.join(parts_short)
+
+    return context
+
+
 # ─────────────────────────── POST /chat/sessions/{id}/send ────
 
 @router.post("/sessions/{session_id}/send")
@@ -151,10 +204,16 @@ async def send_message(
     model_id = payload.model_id or session.get("model_id")
     agent_id = payload.agent_id or session.get("agent_id")
 
+    # Build conversation context with compression
+    history_msgs = await db.get_chat_messages(session_id)
+    # Exclude the user message just created and future empty assistant msg
+    history_msgs = [m for m in history_msgs if m["id"] != user_msg_id]
+    task_description = _build_chat_context(history_msgs, content)
+
     task = await db.create_task(
         id=task_id,
         title=task_title,
-        description=content,
+        description=task_description,
         tags=["chat"],
         agent_id=agent_id,
         model_id=model_id,
