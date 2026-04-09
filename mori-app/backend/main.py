@@ -89,7 +89,7 @@ app.include_router(scheduled_tasks.router, prefix="/api", dependencies=_AUTH)
 app.include_router(chat.router,            prefix="/api", dependencies=_AUTH)
 
 
-@app.get("/", tags=["root"])
+@app.get("/api", tags=["root"])
 async def root() -> dict:
     return {"name": "mori", "version": "2.0.0", "status": "running"}
 
