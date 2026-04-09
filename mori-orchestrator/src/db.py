@@ -247,6 +247,25 @@ class Database:
         # Execute schema in one shot (executescript needs a raw connection)
         await conn.executescript(_SCHEMA)
         await conn.commit()
+        # Idempotent column migrations — add columns that may be missing
+        # if the DB was created by mori-app with an older schema
+        for col_def in [
+            "ALTER TABLE tasks ADD COLUMN claimed_at TEXT",
+            "ALTER TABLE tasks ADD COLUMN error TEXT",
+            "ALTER TABLE tasks ADD COLUMN result TEXT",
+            "ALTER TABLE tasks ADD COLUMN assigned_agent TEXT",
+            "ALTER TABLE tasks ADD COLUMN cost_usd REAL DEFAULT 0.0",
+            # app-schema columns the orchestrator might need to query
+            "ALTER TABLE tasks ADD COLUMN agent_id TEXT",
+            "ALTER TABLE tasks ADD COLUMN model_id TEXT",
+            "ALTER TABLE tasks ADD COLUMN run_cost_usd REAL",
+            "ALTER TABLE tasks ADD COLUMN started_at TEXT",
+        ]:
+            try:
+                await conn.execute(col_def)
+                await conn.commit()
+            except Exception:
+                pass  # column already exists — fine
         log.info("database_initialized", path=self.path)
 
     async def close(self) -> None:
