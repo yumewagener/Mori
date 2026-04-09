@@ -26,6 +26,8 @@ class OrchestratorConfig(BaseModel):
     timeout_default_seconds: int = 1800
     retry_on_failure: int = 1
     stream_output: bool = True
+    smart_routing: bool = False        # usa LLM para routing cuando confianza es baja
+    routing_model: Optional[str] = None  # model_id para routing (si None, usa agente role=router)
 
 
 # ---------------------------------------------------------------------------

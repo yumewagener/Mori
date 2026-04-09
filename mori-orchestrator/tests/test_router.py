@@ -4,6 +4,8 @@ Unit tests for src.router — pipeline and agent selection logic.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from src.config import (
@@ -15,7 +17,7 @@ from src.config import (
     PipelineTrigger,
     RoutingConfig,
 )
-from src.router import Router
+from src.router import Router, RoutingDecision, SmartRouter
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +290,107 @@ class TestAgentSelection:
         result = router.select_agent(task)
 
         assert result.id == "agent-personal"
+
+
+# ---------------------------------------------------------------------------
+# SmartRouter tests
+# ---------------------------------------------------------------------------
+
+
+class TestSmartRouter:
+    def test_routing_decision_dataclass(self) -> None:
+        """RoutingDecision dataclass instantiates with correct defaults."""
+        decision = RoutingDecision(
+            pipeline_id="code_pipeline",
+            agent_id="coder",
+            reasoning="Test reasoning.",
+            confidence=0.9,
+            source="rule",
+        )
+        assert decision.pipeline_id == "code_pipeline"
+        assert decision.agent_id == "coder"
+        assert decision.confidence == 0.9
+        assert decision.source == "rule"
+        assert decision.split is False
+        assert decision.subtasks == []
+
+    @pytest.mark.asyncio
+    async def test_smart_router_uses_rules_when_high_confidence(self) -> None:
+        """When rule confidence >= 0.7, SmartRouter returns rule decision without calling LLM."""
+        p_code = _make_pipeline("code_pipeline", tags=["python", "code", "dev"])
+        p_default = _make_pipeline("pipeline-default", default=True)
+        agent_py = _make_agent("coder", tags=["python", "code", "dev"])
+        config = _make_config(
+            pipelines=[p_code, p_default],
+            agents=[agent_py],
+        )
+        # smart_routing enabled but confidence will be high
+        config.orchestrator.smart_routing = True
+
+        router = SmartRouter(config)
+
+        # Task with 3 matching tags → score = 30 → confidence = 0.9
+        task = {
+            "id": "sr-t1",
+            "title": "Write Python code",
+            "tags": ["python", "code", "dev"],
+            "area": "",
+        }
+
+        with patch("src.router.SmartRouter._llm_route", new_callable=AsyncMock) as mock_llm:
+            decision = await router.route(task)
+
+        # LLM should NOT have been called
+        mock_llm.assert_not_called()
+        assert decision.source == "rule"
+        assert decision.confidence >= 0.7
+
+    @pytest.mark.asyncio
+    async def test_smart_router_returns_rule_decision_with_source_rule(self) -> None:
+        """When smart_routing is False, always returns a rule-sourced decision."""
+        p_default = _make_pipeline("pipeline-default", default=True)
+        agent_gen = _make_agent("agent-gen")
+        config = _make_config(
+            pipelines=[p_default],
+            agents=[agent_gen],
+        )
+        # smart_routing disabled
+        config.orchestrator.smart_routing = False
+
+        router = SmartRouter(config)
+
+        task = {"id": "sr-t2", "title": "Some task", "tags": [], "area": ""}
+
+        with patch("src.router.SmartRouter._llm_route", new_callable=AsyncMock) as mock_llm:
+            decision = await router.route(task)
+
+        mock_llm.assert_not_called()
+        assert decision.source == "rule"
+        assert isinstance(decision, RoutingDecision)
+
+    @pytest.mark.asyncio
+    async def test_llm_fallback_on_llm_error(self) -> None:
+        """When LLM call fails, SmartRouter returns the rule-based decision as fallback."""
+        p_default = _make_pipeline("pipeline-default", default=True)
+        agent_gen = _make_agent("agent-gen")
+        config = _make_config(
+            pipelines=[p_default],
+            agents=[agent_gen],
+        )
+        # Enable smart_routing but confidence will be 0.0 (no tags/areas match)
+        config.orchestrator.smart_routing = True
+        config.orchestrator.routing_model = "non-existent-model"
+
+        router = SmartRouter(config)
+
+        task = {"id": "sr-t3", "title": "Unmatched task", "tags": [], "area": ""}
+
+        # Mock litellm.acompletion to raise an exception
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+            mock_acompletion.side_effect = RuntimeError("LLM connection failed")
+            decision = await router.route(task)
+
+        # Should fall back to rule-based decision
+        assert decision.source == "rule"
+        assert isinstance(decision, RoutingDecision)
+        assert decision.pipeline_id == "pipeline-default"

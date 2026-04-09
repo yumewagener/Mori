@@ -8,6 +8,7 @@ engine under a global concurrency semaphore, and handles graceful shutdown.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import TYPE_CHECKING
 
 import structlog
@@ -15,11 +16,12 @@ import structlog
 from .config import MoriConfig
 from .db import Database
 from .memory import Memory
-from .router import Router
+from .router import SmartRouter
 from .scheduler import Scheduler
 
 if TYPE_CHECKING:
     from .pipeline_engine import PipelineEngine
+    from .router import RoutingDecision
 
 log = structlog.get_logger()
 
@@ -28,7 +30,7 @@ class Orchestrator:
     def __init__(self, config: MoriConfig, db: Database) -> None:
         self.config = config
         self.db = db
-        self.router = Router(config)
+        self.router = SmartRouter(config)
         self.running = True
         # Per-project semaphores to limit parallelism per project
         self._project_semaphores: dict[str, asyncio.Semaphore] = {}
@@ -125,7 +127,7 @@ class Orchestrator:
             await self.db.fail_task(task_id, str(exc))
 
     async def _run_task(self, task: dict) -> None:
-        """Select pipeline and hand off to the pipeline engine."""
+        """Select pipeline via SmartRouter and hand off to the pipeline engine."""
         task_id = task["id"]
         log.info(
             "task_started",
@@ -135,18 +137,75 @@ class Orchestrator:
             tags=task.get("tags"),
         )
 
-        pipeline = self.router.select_pipeline(task)
+        decision = await self.router.route(task)
+
         log.info(
-            "pipeline_selected",
+            "routing_decision",
             task_id=task_id,
-            pipeline_id=pipeline.id,
-            pipeline_name=pipeline.name,
+            pipeline=decision.pipeline_id,
+            agent=decision.agent_id,
+            confidence=decision.confidence,
+            source=decision.source,
+            reasoning=decision.reasoning,
+            split=decision.split,
         )
 
+        if decision.split and decision.subtasks:
+            await self._run_split_task(task, decision)
+            return
+
+        # Lookup pipeline from the decision
+        pipeline = next(
+            (p for p in self.config.pipelines if p.id == decision.pipeline_id), None
+        )
+        if pipeline is None:
+            # fallback al primer pipeline
+            pipeline = self.config.pipelines[0]
+
         engine = self._get_pipeline_engine()
-        await engine.run(task, pipeline)
+        # Pasa el agent_id al engine para que lo use en pasos 'auto'
+        await engine.run(task, pipeline, preferred_agent_id=decision.agent_id)
 
         log.info("task_dispatched", task_id=task_id, pipeline=pipeline.id)
+
+    # ------------------------------------------------------------------
+    # Split task handling
+    # ------------------------------------------------------------------
+
+    async def _run_split_task(self, parent_task: dict, decision: "RoutingDecision") -> None:
+        """Crea subtareas, las ejecuta en paralelo y completa la tarea padre."""
+        subtask_records = []
+        for st in decision.subtasks:
+            subtask_id = str(uuid.uuid4())
+            subtask = await self.db.create_task({
+                "id": subtask_id,
+                "title": st["title"],
+                "description": st.get("description", ""),
+                "tags": st.get("tags", []),
+                "area": st.get("area", parent_task.get("area", "")),
+                "project_id": parent_task.get("project_id"),
+                "parent_task_id": parent_task["id"],
+                "priority": parent_task.get("priority", "normal"),
+            })
+            subtask_records.append(subtask)
+
+        log.info(
+            "split_task_created",
+            parent_task_id=parent_task["id"],
+            subtask_count=len(subtask_records),
+        )
+
+        # Ejecutar subtareas en paralelo
+        semaphore = asyncio.Semaphore(self.config.orchestrator.max_parallel_tasks)
+        async with asyncio.TaskGroup() as tg:
+            for subtask in subtask_records:
+                tg.create_task(self._run_task_safe(subtask, semaphore))
+
+        # Marcar tarea padre como completada
+        await self.db.complete_task(
+            parent_task["id"],
+            f"Dividida en {len(subtask_records)} subtareas y completadas.",
+        )
 
     # ------------------------------------------------------------------
     # Immediate task execution (for chat trigger)

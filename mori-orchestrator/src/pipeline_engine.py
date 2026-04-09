@@ -16,7 +16,7 @@ from .config import AgentConfig, MoriConfig, PipelineConfig, PipelineStep
 from .db import Database
 from .memory import Memory
 from .metrics import Metrics
-from .router import Router
+from .router import Router, SmartRouter
 
 log = structlog.get_logger()
 
@@ -32,7 +32,7 @@ class PipelineEngine:
     def __init__(self, config: MoriConfig, db: Database) -> None:
         self.config = config
         self.db = db
-        self.router = Router(config)
+        self.router = SmartRouter(config)
         self.memory = Memory(config, db)
         self.metrics = Metrics(db)
         self._executor = None  # lazy
@@ -41,9 +41,17 @@ class PipelineEngine:
     # Public interface
     # ------------------------------------------------------------------
 
-    async def run(self, task: dict, pipeline: PipelineConfig) -> dict:
+    async def run(
+        self,
+        task: dict,
+        pipeline: PipelineConfig,
+        preferred_agent_id: str | None = None,
+    ) -> dict:
         """
         Execute all steps in *pipeline* for *task*.
+
+        When *preferred_agent_id* is set, steps with agent="auto" will use
+        that agent instead of the default rule-based selection.
 
         Returns a dict::
 
@@ -88,7 +96,7 @@ class PipelineEngine:
 
             # ---- Resolve agent ------------------------------------
             try:
-                agent = self._resolve_agent(step, task)
+                agent = self._resolve_agent(step, task, preferred_agent_id=preferred_agent_id)
             except ValueError as exc:
                 log.error("agent_resolution_failed", task_id=task_id, error=str(exc))
                 await self.db.fail_task(task_id, str(exc))
@@ -229,8 +237,18 @@ class PipelineEngine:
             return last_status == "needs_changes"
         return True
 
-    def _resolve_agent(self, step: PipelineStep, task: dict) -> AgentConfig:
+    def _resolve_agent(
+        self,
+        step: PipelineStep,
+        task: dict,
+        preferred_agent_id: str | None = None,
+    ) -> AgentConfig:
         if step.agent == "auto":
+            # Use preferred_agent_id if provided and valid
+            if preferred_agent_id:
+                for agent in self.config.agents:
+                    if agent.id == preferred_agent_id and agent.enabled:
+                        return agent
             return self.router.select_agent(task)
         for agent in self.config.agents:
             if agent.id == step.agent:

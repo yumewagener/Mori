@@ -10,6 +10,8 @@ orchestrator:
   timeout_default_seconds: 1800
   retry_on_failure: 1
   stream_output: true
+  smart_routing: false      # ponlo en true para habilitar routing con LLM
+  routing_model: gemini-flash  # modelo rápido y barato para routing (opcional)
 
 # ─────────────────────────────────────────────────────
 # MODELOS — catálogo completo
@@ -86,8 +88,8 @@ models:
 agents:
 
   - id: orchestrator
-    name: Orchestrator
-    model: claude-opus
+    name: Orchestrator (Router)
+    model: gemini-flash        # modelo rápido para routing — no necesita ser potente
     role: router
     enabled: true
     system_prompt: |
