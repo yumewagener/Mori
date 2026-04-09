@@ -68,18 +68,37 @@ export const api = {
   getConfig: () => req('GET', '/system/config'),
 }
 
-// SSE stream for a run
+// SSE stream for a run — uses fetch so we can pass the Bearer token
 export function streamRun(runId, onChunk, onDone, onError) {
   const url = `${BASE}/runs/${runId}/stream`
-  const es = new EventSource(url)
-  es.onmessage = (e) => {
-    if (e.data === '[DONE]') {
-      es.close()
-      onDone?.()
-    } else {
-      onChunk?.(e.data)
-    }
-  }
-  es.onerror = (e) => { es.close(); onError?.(e) }
-  return () => es.close()
+  const token = localStorage.getItem('mori_token') || ''
+  const controller = new AbortController()
+  let stopped = false
+
+  fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      if (!res.ok) { onError?.(new Error(`SSE ${res.status}`)); return }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (!stopped) {
+        const { done, value } = await reader.read()
+        if (done) { onDone?.(); break }
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop()
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6)
+          if (data === '[DONE]') { onDone?.(); stopped = true; break }
+          if (data) onChunk?.(data)
+        }
+      }
+    })
+    .catch((err) => { if (!stopped) onError?.(err) })
+
+  return () => { stopped = true; controller.abort() }
 }
