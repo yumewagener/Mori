@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MORI_HOME="${MORI_HOME:-$HOME/.mori}"
+MORI_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE="docker compose --env-file $MORI_HOME/.env -f $MORI_REPO/docker-compose.yml"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log_info()  { echo -e "${GREEN}[mori]${NC} $*"; }
+log_warn()  { echo -e "${YELLOW}[mori]${NC} $*"; }
+log_error() { echo -e "${RED}[mori]${NC} $*" >&2; }
+
+cmd_install() {
+    log_info "Installing Mori..."
+    
+    # Create directories
+    mkdir -p "$MORI_HOME"/{config,data,logs}
+    
+    # Copy example files if not exists
+    if [[ ! -f "$MORI_HOME/.env" ]]; then
+        cp "$MORI_REPO/mori.env.example" "$MORI_HOME/.env"
+        log_warn "Edit $MORI_HOME/.env with your API keys and token"
+    fi
+    
+    if [[ ! -f "$MORI_HOME/config/mori.yaml" ]]; then
+        cp "$MORI_REPO/mori.yaml.example" "$MORI_HOME/config/mori.yaml"
+        log_info "Config created at $MORI_HOME/config/mori.yaml"
+    fi
+    
+    # Generate token if missing
+    if grep -q "cambia_esto" "$MORI_HOME/.env"; then
+        TOKEN=$(openssl rand -hex 32)
+        sed -i "s/cambia_esto_por_un_token_seguro/$TOKEN/" "$MORI_HOME/.env"
+        log_info "Generated auth token: $TOKEN"
+    fi
+    
+    log_info "Building Docker images..."
+    $COMPOSE build
+    
+    log_info "Mori installed. Run: ./mori start"
+}
+
+cmd_start() {
+    log_info "Starting Mori..."
+    $COMPOSE up -d
+    log_info "Mori running at http://localhost:18811"
+}
+
+cmd_stop() {
+    log_info "Stopping Mori..."
+    $COMPOSE down
+}
+
+cmd_restart() {
+    local service="${1:-}"
+    if [[ -n "$service" ]]; then
+        $COMPOSE restart "$service"
+    else
+        $COMPOSE restart
+    fi
+}
+
+cmd_status() {
+    $COMPOSE ps
+}
+
+cmd_logs() {
+    local service="${1:-}"
+    local flags="-f --tail=100"
+    if [[ -n "$service" ]]; then
+        $COMPOSE logs $flags "$service"
+    else
+        $COMPOSE logs $flags
+    fi
+}
+
+cmd_update() {
+    log_info "Updating Mori..."
+    git -C "$MORI_REPO" pull
+    $COMPOSE build --pull
+    $COMPOSE up -d
+    log_info "Update complete"
+}
+
+cmd_backup() {
+    local backup_dir="${1:-$MORI_HOME/backups}"
+    mkdir -p "$backup_dir"
+    local backup_file="$backup_dir/mori-$(date +%Y%m%d-%H%M%S).sqlite3"
+    cp "$MORI_HOME/data/mori.sqlite3" "$backup_file"
+    log_info "Backup saved to $backup_file"
+}
+
+cmd_ollama() {
+    log_info "Starting Mori with Ollama..."
+    $COMPOSE --profile local-models up -d
+}
+
+cmd_help() {
+    echo ""
+    echo -e "${BLUE}mori${NC} — local multi-model AI orchestrator"
+    echo ""
+    echo "Usage: ./mori <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  install              First-time setup"
+    echo "  start                Start all services"
+    echo "  stop                 Stop all services"
+    echo "  restart [service]    Restart services"
+    echo "  status               Show service status"
+    echo "  logs [service]       Follow logs"
+    echo "  update               Pull and rebuild"
+    echo "  backup [dir]         Backup SQLite database"
+    echo "  ollama               Start with local Ollama models"
+    echo ""
+}
+
+# Main dispatch
+case "${1:-help}" in
+    install)   cmd_install ;;
+    start)     cmd_start ;;
+    stop)      cmd_stop ;;
+    restart)   shift; cmd_restart "$@" ;;
+    status)    cmd_status ;;
+    logs)      shift; cmd_logs "$@" ;;
+    update)    cmd_update ;;
+    backup)    shift; cmd_backup "$@" ;;
+    ollama)    cmd_ollama ;;
+    help|--help|-h) cmd_help ;;
+    *)
+        log_error "Unknown command: $1"
+        cmd_help
+        exit 1
+        ;;
+esac

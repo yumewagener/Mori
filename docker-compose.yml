@@ -1,0 +1,177 @@
+version: "3.9"
+
+x-common-env: &common-env
+  MORI_DB_PATH: /data/mori.sqlite3
+  MORI_TOKEN: ${MORI_TOKEN}
+
+services:
+
+  # ── Seguridad: proxy de socket Docker ────────────────
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      SERVICES: 1
+      INFO: 1
+    networks:
+      - socket-net
+
+  # ── MCP Gateway (HTTP streaming) ─────────────────────
+  mcp-gateway:
+    image: docker/mcp-gateway:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18810:3000"
+    volumes:
+      - ${MORI_HOME}/config/mcp-gateway.json:/app/config.json:ro
+    networks:
+      - mori-net
+    depends_on:
+      - socket-proxy
+      - tasks-mcp
+      - notes-mcp
+      - platform-mcp
+
+  # ── MCP Gateway (SSE) ─────────────────────────────────
+  mcp-gateway-sse:
+    image: docker/mcp-gateway:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18812:3000"
+    environment:
+      MCP_TRANSPORT: sse
+    volumes:
+      - ${MORI_HOME}/config/mcp-gateway.json:/app/config.json:ro
+    networks:
+      - mori-net
+    depends_on:
+      - socket-proxy
+      - tasks-mcp
+      - notes-mcp
+      - platform-mcp
+
+  # ── MCP Servers ───────────────────────────────────────
+  tasks-mcp:
+    build: ./servers/tasks-mcp
+    restart: unless-stopped
+    volumes:
+      - ${MORI_DB_PATH}:/data/mori.sqlite3
+    environment:
+      <<: *common-env
+    networks:
+      - mori-net
+
+  notes-mcp:
+    build: ./servers/notes-mcp
+    restart: unless-stopped
+    volumes:
+      - ${MORI_DB_PATH}:/data/mori.sqlite3
+    environment:
+      <<: *common-env
+    networks:
+      - mori-net
+
+  platform-mcp:
+    build: ./servers/platform-mcp
+    restart: unless-stopped
+    volumes:
+      - ${MORI_DB_PATH}:/data/mori.sqlite3
+    environment:
+      <<: *common-env
+      DOCKER_HOST: tcp://socket-proxy:2375
+    networks:
+      - mori-net
+      - socket-net
+
+  # ── App API (FastAPI) ─────────────────────────────────
+  app:
+    build: ./mori-app
+    restart: unless-stopped
+    volumes:
+      - ${MORI_DB_PATH}:/data/mori.sqlite3
+      - ${MORI_HOME}/config/mori.yaml:/config/mori.yaml:ro
+    environment:
+      <<: *common-env
+      MORI_CONFIG: /config/mori.yaml
+    networks:
+      - mori-net
+    depends_on:
+      - socket-proxy
+
+  # ── Orchestrator (motor principal) ───────────────────
+  orchestrator:
+    build: ./mori-orchestrator
+    restart: unless-stopped
+    volumes:
+      - ${MORI_DB_PATH}:/data/mori.sqlite3
+      - ${MORI_HOME}/config/mori.yaml:/config/mori.yaml:ro
+    environment:
+      <<: *common-env
+      MORI_CONFIG: /config/mori.yaml
+      MORI_MCP_URL: http://mcp-gateway:3000
+    networks:
+      - mori-net
+    depends_on:
+      - app
+      - mcp-gateway
+
+  # ── Reverse proxy (Caddy) ─────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "18811:80"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    environment:
+      MORI_TOKEN: ${MORI_TOKEN}
+    networks:
+      - mori-net
+
+  # ── Ollama (modelos locales, opcional) ────────────────
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [local-models]
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    networks:
+      - mori-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ── SearXNG (búsqueda web, opcional) ─────────────────
+  searxng:
+    image: searxng/searxng:latest
+    profiles: [web-search]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - mori-net
+
+networks:
+  mori-net:
+    driver: bridge
+  socket-net:
+    driver: bridge
+    internal: true
+
+volumes:
+  caddy_data:
+  ollama_data:

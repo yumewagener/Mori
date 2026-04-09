@@ -1,0 +1,292 @@
+# ─────────────────────────────────────────────────────
+# MORI v2 — configuración del orquestador
+# ─────────────────────────────────────────────────────
+
+orchestrator:
+  poll_seconds: 15
+  max_parallel_tasks: 4
+  max_parallel_per_project: 2
+  heartbeat_seconds: 30
+  timeout_default_seconds: 1800
+  retry_on_failure: 1
+  stream_output: true
+
+# ─────────────────────────────────────────────────────
+# MODELOS — catálogo completo
+# ─────────────────────────────────────────────────────
+models:
+
+  - id: claude-opus
+    provider: anthropic
+    model: claude-opus-4-5
+    api_key_env: ANTHROPIC_API_KEY
+    max_tokens: 200000
+    capabilities: [reasoning, coding, writing, analysis, planning]
+    cost_per_1k_input: 0.015
+    cost_per_1k_output: 0.075
+    supports_tools: true
+
+  - id: claude-sonnet
+    provider: anthropic
+    model: claude-sonnet-4-5
+    api_key_env: ANTHROPIC_API_KEY
+    max_tokens: 200000
+    capabilities: [coding, writing, analysis]
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+    supports_tools: true
+
+  - id: gpt-4o
+    provider: openai
+    model: gpt-4o
+    api_key_env: OPENAI_API_KEY
+    capabilities: [reasoning, writing, analysis, vision]
+    supports_tools: true
+
+  - id: gemini-flash
+    provider: google
+    model: gemini-2.0-flash
+    api_key_env: GOOGLE_API_KEY
+    capabilities: [writing, analysis, fast]
+    cost_per_1k_input: 0.0001
+    supports_tools: true
+
+  - id: llama3-local
+    provider: ollama
+    model: llama3.3:70b
+    base_url: http://ollama:11434
+    capabilities: [writing, analysis, coding]
+    cost_per_1k_input: 0
+    supports_tools: false
+
+  - id: qwen-coder-local
+    provider: ollama
+    model: qwen2.5-coder:32b
+    base_url: http://ollama:11434
+    capabilities: [coding]
+    cost_per_1k_input: 0
+    supports_tools: false
+
+# ─────────────────────────────────────────────────────
+# AGENTES — roles y configuración
+# ─────────────────────────────────────────────────────
+agents:
+
+  - id: orchestrator
+    name: Orchestrator
+    model: claude-opus
+    role: router
+    enabled: true
+    system_prompt: |
+      Eres el orquestador de Mori. Recibes una tarea y decides:
+      1. Si puedes ejecutarla directamente o necesitas delegarla
+      2. Qué agente o modelo es el más adecuado
+      3. Si debe dividirse en subtareas
+      Tienes acceso al catálogo de agentes y sus capacidades.
+      Sé conciso en tu razonamiento. Prioriza el modelo más económico
+      que pueda hacer el trabajo con calidad suficiente.
+    tools:
+      - task_list
+      - task_create
+      - task_update_status
+      - note_list
+      - pipeline_status
+
+  - id: coder
+    name: Code Agent
+    model: claude-sonnet
+    fallback_model: qwen-coder-local
+    role: executor
+    enabled: true
+    routing:
+      tags: [coding, dev, bug, feature, refactor, test, deploy]
+      areas: [proyecto, sistema]
+      keywords: [código, script, función, clase, API, endpoint, test, implementar, arreglar]
+    system_prompt: |
+      Eres un ingeniero de software experto. Tu trabajo es implementar
+      la tarea descrita con código limpio, testeado y documentado.
+      Usa las herramientas de filesystem para leer el contexto del proyecto
+      antes de hacer cambios. Verifica tu trabajo ejecutando tests si existen.
+    tools:
+      - read_file
+      - write_file
+      - list_directory
+      - search_files
+      - container_logs
+      - container_restart
+    working_directory: true
+    timeout_seconds: 3600
+
+  - id: researcher
+    name: Research Agent
+    model: gpt-4o
+    fallback_model: gemini-flash
+    role: executor
+    enabled: true
+    routing:
+      tags: [research, análisis, revisión, comparativa, informe]
+      areas: [personal, empresa]
+      keywords: [investigar, analizar, comparar, resumir, buscar, informe]
+    system_prompt: |
+      Eres un analista de investigación. Tu trabajo es recopilar,
+      analizar y sintetizar información de manera estructurada.
+      Crea notas con los hallazgos para que queden en el sistema.
+    tools:
+      - web_search
+      - note_list
+      - note_create
+      - decision_create
+    timeout_seconds: 1200
+
+  - id: writer
+    name: Writer Agent
+    model: gemini-flash
+    fallback_model: llama3-local
+    role: executor
+    enabled: true
+    routing:
+      tags: [escritura, redacción, email, documento, post, blog]
+      keywords: [escribir, redactar, documento, email, post]
+    system_prompt: |
+      Eres un escritor profesional. Produces contenido claro,
+      bien estructurado y adaptado al tono requerido.
+    tools:
+      - note_create
+      - note_list
+    timeout_seconds: 600
+
+  - id: reviewer
+    name: Reviewer Agent
+    model: llama3-local
+    fallback_model: claude-sonnet
+    role: reviewer
+    enabled: true
+    system_prompt: |
+      Eres un revisor crítico. Evalúa el trabajo producido por otro agente:
+      - ¿Cumple con los requisitos de la tarea?
+      - ¿Hay errores evidentes?
+      - ¿Qué mejorarías?
+      Sé conciso. Devuelve exactamente una de estas palabras al inicio:
+      APROBADO, NECESITA_CAMBIOS, o RECHAZADO
+      seguida de una explicación breve.
+    tools: []
+    timeout_seconds: 300
+
+  - id: planner
+    name: Planner Agent
+    model: claude-opus
+    role: planner
+    enabled: true
+    system_prompt: |
+      Recibes una tarea grande o ambigua y la divides en subtareas
+      concretas y ejecutables. Cada subtarea debe ser independiente
+      y asignable a un agente específico.
+      Devuelve un JSON con el array de subtareas con esta estructura:
+      {"subtasks": [{"title": "...", "description": "...", "tags": [...], "area": "..."}]}
+    tools:
+      - task_create
+      - project_list
+    timeout_seconds: 300
+
+# ─────────────────────────────────────────────────────
+# PIPELINES — flujos de ejecución multi-paso
+# ─────────────────────────────────────────────────────
+pipelines:
+
+  - id: standard
+    name: Standard Pipeline
+    description: Ejecuta la tarea y opcionalmente la revisa
+    default: true
+    steps:
+      - agent: auto
+        phase: execute
+      - agent: reviewer
+        phase: review
+        condition: on_success
+        optional: true
+
+  - id: code_pipeline
+    name: Code Pipeline
+    description: Implementar código con revisión y corrección automática
+    trigger:
+      tags: [coding, dev, bug, feature, refactor]
+    steps:
+      - agent: coder
+        phase: execute
+      - agent: reviewer
+        phase: review
+        condition: on_success
+      - agent: coder
+        phase: fix
+        condition: needs_changes
+        max_iterations: 2
+
+  - id: planning_pipeline
+    name: Planning Pipeline
+    description: Divide tareas grandes en subtareas y las ejecuta
+    trigger:
+      tags: [épica, planning, proyecto-nuevo]
+    steps:
+      - agent: planner
+        phase: plan
+      - agent: auto
+        phase: execute
+        parallel: true
+        condition: on_success
+
+  - id: research_pipeline
+    name: Research Pipeline
+    description: Investiga un tema y produce un documento estructurado
+    trigger:
+      tags: [research, análisis]
+    steps:
+      - agent: researcher
+        phase: research
+      - agent: writer
+        phase: write
+        condition: on_success
+
+# ─────────────────────────────────────────────────────
+# MEMORIA Y CONTEXTO
+# ─────────────────────────────────────────────────────
+memory:
+  enabled: true
+  embedding_model: nomic-embed-text
+  fallback: tfidf
+  top_k: 5
+  sources:
+    - notes
+    - decisions
+    - task_history
+
+# ─────────────────────────────────────────────────────
+# HERRAMIENTAS EXTERNAS
+# ─────────────────────────────────────────────────────
+tools:
+  web_search:
+    enabled: false
+    provider: searxng
+    searxng_url: http://searxng:8080
+
+  shell:
+    enabled: false
+    allowed_commands: [git, pytest, npm, cargo, make, python]
+    working_directory_only: true
+
+  browser:
+    enabled: false
+    headless: true
+
+# ─────────────────────────────────────────────────────
+# NOTIFICACIONES
+# ─────────────────────────────────────────────────────
+notifications:
+  telegram:
+    enabled: false
+    bot_token_env: MORI_TELEGRAM_BOT_TOKEN
+    chat_id_env: MORI_TELEGRAM_CHAT_ID
+    on_events: [task_completed, task_failed, pipeline_blocked]
+
+  webhook:
+    enabled: false
+    url_env: MORI_WEBHOOK_URL

@@ -1,0 +1,34 @@
+:80 {
+    # Autenticación Bearer para toda la API
+    @authenticated {
+        header Authorization "Bearer {$MORI_TOKEN}"
+    }
+    
+    # MCP Gateway streaming
+    handle /mcp/* {
+        @needs_auth not header Authorization *
+        respond @needs_auth 401
+        reverse_proxy mcp-gateway:3000
+    }
+    
+    # MCP Gateway SSE
+    handle /sse/* {
+        reverse_proxy mcp-gateway-sse:3000
+    }
+    
+    # API y streaming SSE del orchestrator
+    handle /api/* {
+        reverse_proxy app:8080
+    }
+    
+    # Web UI (Svelte build, servido desde app)
+    handle {
+        reverse_proxy app:8080
+    }
+    
+    # Logs
+    log {
+        output stdout
+        format json
+    }
+}

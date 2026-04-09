@@ -1,0 +1,47 @@
+general:
+  debug: false
+  instance_name: "Mori Search"
+  privacypolicy_url: false
+  contact_url: false
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "auto"
+
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "change_this_secret"
+  limiter: false
+
+ui:
+  static_use_hash: false
+  default_locale: ""
+  theme_args:
+    simple_style: auto
+
+outgoing:
+  request_timeout: 3.0
+  max_request_timeout: 10.0
+  useragent_suffix: ""
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+  - name: bing
+    engine: bing
+    shortcut: b
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: d
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: w
+    url: https://en.wikipedia.org/
+
+result_proxy:
+  url: ""
+  key: ""
