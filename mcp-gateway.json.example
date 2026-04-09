@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "tasks": {
+      "command": "docker",
+      "args": ["exec", "-i", "mori-tasks-mcp-1", "python", "server.py"],
+      "env": {}
+    },
+    "notes": {
+      "command": "docker",
+      "args": ["exec", "-i", "mori-notes-mcp-1", "python", "server.py"],
+      "env": {}
+    },
+    "platform": {
+      "command": "docker",
+      "args": ["exec", "-i", "mori-platform-mcp-1", "python", "server.py"],
+      "env": {}
+    }
+  }
+}

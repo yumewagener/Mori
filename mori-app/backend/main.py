@@ -90,3 +90,24 @@ app.include_router(system.router,    prefix="/api")  # /health has no auth
 @app.get("/", tags=["root"])
 async def root() -> dict:
     return {"name": "mori", "version": "2.0.0", "status": "running"}
+
+
+# ─────────────────────────── static SPA ──────────────────────
+
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+_FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+
+if _FRONTEND_DIST.exists():
+    # Serve compiled Svelte assets
+    app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        """Serve index.html for all non-API routes (SPA client-side routing)."""
+        index = _FRONTEND_DIST / "index.html"
+        if index.exists():
+            return FileResponse(index)
+        return {"error": "Frontend not built. Run: cd mori-app/frontend && npm run build"}

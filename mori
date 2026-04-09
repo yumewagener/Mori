@@ -33,6 +33,11 @@ cmd_install() {
         log_info "Config created at $MORI_HOME/config/mori.yaml"
     fi
     
+    if [[ ! -f "$MORI_HOME/config/mcp-gateway.json" ]]; then
+        cp "$MORI_REPO/mcp-gateway.json.example" "$MORI_HOME/config/mcp-gateway.json"
+        log_info "MCP gateway config created at $MORI_HOME/config/mcp-gateway.json"
+    fi
+    
     # Generate token if missing
     if grep -q "cambia_esto" "$MORI_HOME/.env"; then
         TOKEN=$(openssl rand -hex 32)
