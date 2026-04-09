@@ -60,7 +60,7 @@ services:
     build: ./servers/tasks-mcp
     restart: unless-stopped
     volumes:
-      - ${MORI_DB_PATH}:/data/mori.sqlite3
+      - ${MORI_HOME}/data:/data
     environment:
       <<: *common-env
     networks:
@@ -70,7 +70,7 @@ services:
     build: ./servers/notes-mcp
     restart: unless-stopped
     volumes:
-      - ${MORI_DB_PATH}:/data/mori.sqlite3
+      - ${MORI_HOME}/data:/data
     environment:
       <<: *common-env
     networks:
@@ -80,7 +80,7 @@ services:
     build: ./servers/platform-mcp
     restart: unless-stopped
     volumes:
-      - ${MORI_DB_PATH}:/data/mori.sqlite3
+      - ${MORI_HOME}/data:/data
     environment:
       <<: *common-env
       DOCKER_HOST: tcp://socket-proxy:2375
@@ -93,7 +93,7 @@ services:
     build: ./mori-app
     restart: unless-stopped
     volumes:
-      - ${MORI_DB_PATH}:/data/mori.sqlite3
+      - ${MORI_HOME}/data:/data
       - ${MORI_HOME}/config/mori.yaml:/config/mori.yaml:ro
     environment:
       <<: *common-env
@@ -108,7 +108,7 @@ services:
     build: ./mori-orchestrator
     restart: unless-stopped
     volumes:
-      - ${MORI_DB_PATH}:/data/mori.sqlite3
+      - ${MORI_HOME}/data:/data
       - ${MORI_HOME}/config/mori.yaml:/config/mori.yaml:ro
       - ${HOME}/.claude:/root/.claude  # Claude Code OAuth session persistence
     environment:
