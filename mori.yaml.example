@@ -10,7 +10,7 @@ orchestrator:
   timeout_default_seconds: 1800
   retry_on_failure: 1
   stream_output: true
-  smart_routing: false      # ponlo en true para habilitar routing con LLM
+  smart_routing: true       # routing inteligente con LLM (desactiva con false si quieres solo reglas)
   routing_model: gemini-3-flash  # modelo rápido y barato para routing (opcional)
 
 # ─────────────────────────────────────────────────────
