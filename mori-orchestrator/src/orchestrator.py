@@ -215,9 +215,16 @@ class Orchestrator:
         """Execute a task immediately, bypassing the poll delay.
 
         Used by the HTTP /trigger endpoint for real-time chat responses.
+        Retries up to 10 times with 300ms delay to handle SQLite WAL
+        visibility race between the app and orchestrator containers.
         """
         try:
-            task = await self.db.get_task(task_id)
+            task = None
+            for attempt in range(10):
+                task = await self.db.get_task(task_id)
+                if task is not None:
+                    break
+                await asyncio.sleep(0.3)
             if task is None:
                 log.warning("trigger_task_not_found", task_id=task_id)
                 return
