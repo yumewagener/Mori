@@ -235,6 +235,13 @@ class Orchestrator:
                     status=task.get("status"),
                 )
                 return
+            # Claim the task immediately to prevent the poll loop from picking it up
+            conn = await self.db._get_conn()
+            await conn.execute(
+                "UPDATE tasks SET status='en_progreso', claimed_at=datetime('now') WHERE id=? AND status='pendiente'",
+                (task_id,)
+            )
+            await conn.commit()
             log.info("trigger_task_immediate", task_id=task_id)
             await self._run_task(task)
         except Exception as exc:

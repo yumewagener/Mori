@@ -209,6 +209,12 @@ class PipelineEngine:
                 agent_id=None,
                 model_id=None,
             )
+            # Persist assistant message content for chat sessions
+            if last_result.content:
+                try:
+                    await self.db.update_chat_message_by_task(task_id, last_result.content)
+                except Exception:
+                    pass  # not a chat task — fine
             log.info(
                 "pipeline_completed",
                 task_id=task_id,

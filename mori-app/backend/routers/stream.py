@@ -37,7 +37,7 @@ async def stream_run(
     async def event_generator() -> AsyncGenerator[dict, None]:
         last_id = 0
         idle_ticks = 0
-        max_idle = 600  # 60 s of no new chunks after run completes before giving up
+        max_idle = 10   # 1 s after run completes of no new chunks after run completes before giving up
 
         while True:
             # Respect client disconnect

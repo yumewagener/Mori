@@ -480,6 +480,15 @@ class Database:
             (task_id,),
         )
 
+    async def update_chat_message_by_task(self, task_id: str, content: str) -> None:
+        """Persist assistant chat message content after pipeline completes."""
+        conn = await self._get_conn()
+        await conn.execute(
+            "UPDATE chat_messages SET content=? WHERE task_id=? AND role='assistant'",
+            (content, task_id),
+        )
+        await conn.commit()
+
     async def update_agent_run_info(
         self, run_id: str, agent_id: str, model_id: str, pipeline_id: str, phase: str
     ) -> None:
