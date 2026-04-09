@@ -473,6 +473,24 @@ class Database:
         )
         await conn.commit()
 
+    async def get_running_agent_run_for_task(self, task_id: str) -> Optional[dict]:
+        """Return the first 'running' agent_run for a task (created by chat backend)."""
+        return await self._fetchone(
+            "SELECT * FROM agent_runs WHERE task_id=? AND status='running' ORDER BY started_at ASC LIMIT 1",
+            (task_id,),
+        )
+
+    async def update_agent_run_info(
+        self, run_id: str, agent_id: str, model_id: str, pipeline_id: str, phase: str
+    ) -> None:
+        """Update placeholder agent_run with real agent/model/pipeline info."""
+        conn = await self._get_conn()
+        await conn.execute(
+            "UPDATE agent_runs SET agent_id=?, model_id=?, pipeline_id=?, phase=? WHERE id=?",
+            (agent_id, model_id, pipeline_id, phase, run_id),
+        )
+        await conn.commit()
+
     async def get_agent_run(self, run_id: str) -> Optional[dict]:
         return await self._fetchone(
             "SELECT * FROM agent_runs WHERE id = ?", (run_id,)

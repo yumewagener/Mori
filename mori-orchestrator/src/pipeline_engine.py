@@ -112,13 +112,28 @@ class PipelineEngine:
             )
 
             # ---- Create run record --------------------------------
-            run_id = await self.db.create_agent_run(
-                task_id=task_id,
-                agent_id=agent.id,
-                model_id=agent.model,
-                pipeline_id=pipeline.id,
-                phase=step.phase,
-            )
+            # Reuse existing 'running' run_id from chat backend (step 0 only)
+            # so the frontend SSE stream receives the actual chunks.
+            existing_run = None
+            if step_idx == 0:
+                try:
+                    existing_run = await self.db.get_running_agent_run_for_task(task_id)
+                except Exception:
+                    existing_run = None
+
+            if existing_run:
+                run_id = existing_run["id"]
+                await self.db.update_agent_run_info(
+                    run_id, agent.id, agent.model, pipeline.id, step.phase
+                )
+            else:
+                run_id = await self.db.create_agent_run(
+                    task_id=task_id,
+                    agent_id=agent.id,
+                    model_id=agent.model,
+                    pipeline_id=pipeline.id,
+                    phase=step.phase,
+                )
 
             # ---- Retrieve memory context -------------------------
             context = ""
