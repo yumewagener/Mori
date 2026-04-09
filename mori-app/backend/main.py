@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .db import Database
-from .routers import agents, memory, models, notes, pipelines, projects, scheduled_tasks, stream, system, tasks
+from .routers import agents, chat, memory, models, notes, pipelines, projects, scheduled_tasks, stream, system, tasks
 
 log = structlog.get_logger(__name__)
 
@@ -86,6 +86,7 @@ app.include_router(memory.router,    prefix="/api", dependencies=_AUTH)
 app.include_router(stream.router,    prefix="/api", dependencies=_AUTH)
 app.include_router(system.router,          prefix="/api")  # /health has no auth
 app.include_router(scheduled_tasks.router, prefix="/api", dependencies=_AUTH)
+app.include_router(chat.router,            prefix="/api", dependencies=_AUTH)
 
 
 @app.get("/", tags=["root"])

@@ -149,6 +149,36 @@ class Orchestrator:
         log.info("task_dispatched", task_id=task_id, pipeline=pipeline.id)
 
     # ------------------------------------------------------------------
+    # Immediate task execution (for chat trigger)
+    # ------------------------------------------------------------------
+
+    async def execute_task_by_id(self, task_id: str) -> None:
+        """Execute a task immediately, bypassing the poll delay.
+
+        Used by the HTTP /trigger endpoint for real-time chat responses.
+        """
+        try:
+            task = await self.db.get_task(task_id)
+            if task is None:
+                log.warning("trigger_task_not_found", task_id=task_id)
+                return
+            if task.get("status") != "pendiente":
+                log.warning(
+                    "trigger_task_not_pending",
+                    task_id=task_id,
+                    status=task.get("status"),
+                )
+                return
+            log.info("trigger_task_immediate", task_id=task_id)
+            await self._run_task(task)
+        except Exception as exc:
+            log.error("trigger_task_error", task_id=task_id, error=str(exc), exc_info=True)
+            try:
+                await self.db.fail_task(task_id, str(exc))
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
     # Graceful shutdown
     # ------------------------------------------------------------------
 

@@ -54,6 +54,14 @@ export const api = {
   searchMemory: (q) => req('GET', `/memory/search?q=${encodeURIComponent(q)}`),
   getMemoryChunks: () => req('GET', '/memory/chunks'),
 
+  // Chat
+  getChatSessions: () => req('GET', '/chat/sessions'),
+  createChatSession: (data) => req('POST', '/chat/sessions', data),
+  getChatSession: (id) => req('GET', `/chat/sessions/${id}`),
+  deleteChatSession: (id) => req('DELETE', `/chat/sessions/${id}`),
+  getChatMessages: (sessionId) => req('GET', `/chat/sessions/${sessionId}/messages`),
+  sendChatMessage: (sessionId, data) => req('POST', `/chat/sessions/${sessionId}/send`, data),
+
   // System
   getHealth: () => req('GET', '/health'),
   getStats: () => req('GET', '/system/stats'),

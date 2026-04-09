@@ -1,6 +1,7 @@
 <script>
   import { Router, Route } from 'svelte-routing'
   import Sidebar from './components/Sidebar.svelte'
+  import Chat from './routes/Chat.svelte'
   import Dashboard from './routes/Dashboard.svelte'
   import Tasks from './routes/Tasks.svelte'
   import TaskRun from './routes/TaskRun.svelte'
@@ -20,6 +21,7 @@
   <div class="app">
     <Sidebar />
     <main class="content">
+      <Route path="/chat" component={Chat} />
       <Route path="/" component={Dashboard} />
       <Route path="/tasks" component={Tasks} />
       <Route path="/tasks/:id/run" let:params>

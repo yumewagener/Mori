@@ -73,6 +73,30 @@ class Database:
             await self._conn.executescript(schema)
             await self._conn.commit()
             log.info("database.schema_applied")
+        else:
+            # Apply chat tables for existing databases (idempotent)
+            await self._conn.executescript("""
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    id         TEXT PRIMARY KEY,
+                    title      TEXT NOT NULL DEFAULT 'Nueva conversaci\u00f3n',
+                    model_id   TEXT,
+                    agent_id   TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id         TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                    role       TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                    content    TEXT NOT NULL DEFAULT '',
+                    run_id     TEXT,
+                    task_id    TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at);
+            """)
+            await self._conn.commit()
+            log.info("database.chat_tables_ensured")
 
     async def close(self) -> None:
         if self._conn:
@@ -592,6 +616,101 @@ class Database:
     # ════════════════════════════════════════════════════════════════
     # SYSTEM STATS
     # ════════════════════════════════════════════════════════════════
+
+    # ══════════════════════════════════════════════════════════════════
+    # CHAT SESSIONS
+    # ══════════════════════════════════════════════════════════════════
+
+    async def create_chat_session(
+        self,
+        session_id: str,
+        title: str = "Nueva conversación",
+        model_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> dict:
+        now = _now()
+        await self._conn.execute(
+            """
+            INSERT INTO chat_sessions (id, title, model_id, agent_id, created_at, updated_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (session_id, title, model_id, agent_id, now, now),
+        )
+        await self._conn.commit()
+        return await self.get_chat_session(session_id)  # type: ignore[return-value]
+
+    async def get_chat_sessions(self) -> list[dict]:
+        return await self._fetchall(
+            "SELECT * FROM chat_sessions ORDER BY updated_at DESC"
+        )
+
+    async def get_chat_session(self, session_id: str) -> dict | None:
+        return await self._fetchone(
+            "SELECT * FROM chat_sessions WHERE id = ?", (session_id,)
+        )
+
+    async def update_chat_session_title(self, session_id: str, title: str) -> None:
+        now = _now()
+        await self._conn.execute(
+            "UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?",
+            (title, now, session_id),
+        )
+        await self._conn.commit()
+
+    async def delete_chat_session(self, session_id: str) -> bool:
+        cur = await self._conn.execute(
+            "DELETE FROM chat_sessions WHERE id = ?", (session_id,)
+        )
+        await self._conn.commit()
+        return cur.rowcount > 0
+
+    # ══════════════════════════════════════════════════════════════════
+    # CHAT MESSAGES
+    # ══════════════════════════════════════════════════════════════════
+
+    async def create_chat_message(
+        self,
+        message_id: str,
+        session_id: str,
+        role: str,
+        content: str = "",
+        run_id: str | None = None,
+        task_id: str | None = None,
+    ) -> dict:
+        now = _now()
+        await self._conn.execute(
+            """
+            INSERT INTO chat_messages (id, session_id, role, content, run_id, task_id, created_at)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (message_id, session_id, role, content, run_id, task_id, now),
+        )
+        # Also update session updated_at
+        await self._conn.execute(
+            "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+            (now, session_id),
+        )
+        await self._conn.commit()
+        return await self._fetchone(  # type: ignore[return-value]
+            "SELECT * FROM chat_messages WHERE id = ?", (message_id,)
+        )
+
+    async def get_chat_messages(self, session_id: str) -> list[dict]:
+        return await self._fetchall(
+            "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC",
+            (session_id,),
+        )
+
+    async def update_chat_message_content(self, message_id: str, content: str) -> None:
+        await self._conn.execute(
+            "UPDATE chat_messages SET content = ? WHERE id = ?",
+            (content, message_id),
+        )
+        await self._conn.commit()
+
+    # ══════════════════════════════════════════════════════════════════
+    # SYSTEM STATS
+    # ══════════════════════════════════════════════════════════════════
 
     async def get_daily_stats(self) -> dict:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
