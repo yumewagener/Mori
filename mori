@@ -64,11 +64,15 @@ cmd_setup() {
     echo -e "Mori puede usar los siguientes proveedores de modelos."
     echo -e "Selecciona los que quieras configurar:"
     echo ""
-    echo -e "  ${CYAN}[1]${NC} Anthropic Claude 4.x  (Opus, Sonnet, Haiku)"
-    echo -e "  ${CYAN}[2]${NC} OpenAI GPT-5.4        (flagship, mini, nano)"
-    echo -e "  ${CYAN}[3]${NC} Google Gemini 3.x     (Pro, Flash, Flash-Lite)"
-    echo -e "  ${CYAN}[4]${NC} Ollama                (modelos locales — Llama, Qwen)"
-    echo -e "  ${CYAN}[5]${NC} Claude Code CLI       (suscripción Pro/Max, sin API key)"
+    echo -e "  ${CYAN}[1]${NC} Anthropic Claude 4.x  (Opus, Sonnet, Haiku) — requiere API key"
+    echo -e "  ${CYAN}[2]${NC} OpenAI GPT-5.4        (flagship, mini, nano) — requiere API key"
+    echo -e "  ${CYAN}[3]${NC} Google Gemini 3.x     (Pro, Flash, Flash-Lite) — requiere API key"
+    echo -e "  ${CYAN}[4]${NC} Ollama                (modelos locales — Llama, Qwen) — sin coste"
+    echo -e "  ${CYAN}[5]${NC} Claude Code CLI       (suscripción claude.ai Pro/Max) — sin API key"
+    echo ""
+    echo -e "  ${YELLOW}Nota:${NC} OpenAI no tiene equivalente al CLI de Claude."
+    echo -e "  La suscripción ChatGPT Plus y la API de OpenAI son productos separados."
+    echo -e "  Para usar GPT-5.4 necesitas una API key de platform.openai.com"
     echo ""
     read -rp "Introduce los números separados por comas [1,2,3,4,5]: " providers_input
     echo ""
@@ -133,7 +137,7 @@ cmd_setup() {
     smart_routing=true
     routing_model="gemini-3-flash"
 
-    if [[ "${smart_routing_input,,}" == "n" ]]; then
+    if [[ "$(echo "${smart_routing_input}" | tr '[:upper:]' '[:lower:]')" == "n" ]]; then
         smart_routing=false
     fi
 
@@ -159,7 +163,7 @@ cmd_setup() {
     if [[ -f "$MORI_HOME/config/mori.yaml" ]]; then
         read -rp "Ya existe una configuración. ¿Sobreescribir? [s/N]: " overwrite_input
         echo ""
-        if [[ "${overwrite_input,,}" != "s" ]]; then
+        if [[ "$(echo "${overwrite_input}" | tr '[:upper:]' '[:lower:]')" != "s" ]]; then
             log_warn "Configuración no modificada."
             log_info "Puedes editar manualmente: $MORI_HOME/config/mori.yaml"
             return
@@ -850,7 +854,7 @@ YAML_EOF
     # ── Docker build ──────────────────────────────────────────────────
     read -rp "¿Construir imágenes Docker ahora? [S/n]: " build_input
     echo ""
-    if [[ "${build_input,,}" != "n" ]]; then
+    if [[ "$(echo "${build_input}" | tr '[:upper:]' '[:lower:]')" != "n" ]]; then
         log_info "Construyendo imágenes Docker..."
         $COMPOSE build
     fi
@@ -858,7 +862,7 @@ YAML_EOF
     # ── Docker up ─────────────────────────────────────────────────────
     read -rp "¿Arrancar Mori ahora? [S/n]: " start_input
     echo ""
-    if [[ "${start_input,,}" != "n" ]]; then
+    if [[ "$(echo "${start_input}" | tr '[:upper:]' '[:lower:]')" != "n" ]]; then
         log_info "Arrancando Mori..."
         $COMPOSE up -d
         echo ""
