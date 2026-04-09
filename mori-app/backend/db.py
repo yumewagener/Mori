@@ -96,7 +96,20 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at);
             """)
             await self._conn.commit()
-            log.info("database.chat_tables_ensured")
+            # Add orchestrator columns to tasks table if missing (idempotent)
+            for col_def in [
+                "ALTER TABLE tasks ADD COLUMN claimed_at TEXT",
+                "ALTER TABLE tasks ADD COLUMN error TEXT",
+                "ALTER TABLE tasks ADD COLUMN result TEXT",
+                "ALTER TABLE tasks ADD COLUMN assigned_agent TEXT",
+                "ALTER TABLE tasks ADD COLUMN cost_usd REAL DEFAULT 0.0",
+            ]:
+                try:
+                    await self._conn.execute(col_def)
+                    await self._conn.commit()
+                except Exception:
+                    pass  # column already exists
+            log.info("database.schema_synced")
 
     async def close(self) -> None:
         if self._conn:

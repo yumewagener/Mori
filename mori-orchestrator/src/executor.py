@@ -325,13 +325,15 @@ class Executor:
             )
 
             try:
-                response = await litellm.acompletion(
+                _completion_kwargs = {
                     **litellm_kwargs,
-                    messages=messages,
-                    tools=tools_schema if tools_schema else litellm.NOT_GIVEN,
-                    stream=self.config.orchestrator.stream_output,
-                    timeout=agent.timeout_seconds,
-                )
+                    "messages": messages,
+                    "stream": self.config.orchestrator.stream_output,
+                    "timeout": agent.timeout_seconds,
+                }
+                if tools_schema:
+                    _completion_kwargs["tools"] = tools_schema
+                response = await litellm.acompletion(**_completion_kwargs)
             except asyncio.TimeoutError:
                 raise RuntimeError(
                     f"Agent '{agent.id}' timed out after {agent.timeout_seconds}s "
