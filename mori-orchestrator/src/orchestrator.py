@@ -14,7 +14,9 @@ import structlog
 
 from .config import MoriConfig
 from .db import Database
+from .memory import Memory
 from .router import Router
+from .scheduler import Scheduler
 
 if TYPE_CHECKING:
     from .pipeline_engine import PipelineEngine
@@ -60,11 +62,24 @@ class Orchestrator:
 
     async def run(self) -> None:
         """Poll for pending tasks and dispatch them concurrently."""
+        scheduler = Scheduler(self.db)
+        memory = Memory(self.config, self.db)
         semaphore = asyncio.Semaphore(self.config.orchestrator.max_parallel_tasks)
+
+        log.info(
+            "orchestrator_loop_started",
+            poll_seconds=self.config.orchestrator.poll_seconds,
+        )
+
+        # Run scheduler, background indexer, and main poll loop concurrently
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(scheduler.run())
+            tg.create_task(memory.run_background_indexer())
+            tg.create_task(self._poll_loop(semaphore))
+
+    async def _poll_loop(self, semaphore: asyncio.Semaphore) -> None:
+        """Main task-polling loop."""
         poll_seconds = self.config.orchestrator.poll_seconds
-
-        log.info("orchestrator_loop_started", poll_seconds=poll_seconds)
-
         while self.running:
             try:
                 tasks = await self.db.claim_pending_tasks(

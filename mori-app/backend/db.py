@@ -510,8 +510,88 @@ class Database:
         return cur.rowcount > 0
 
     # ══════════════════════════════════════════════════════════════════
-    # SYSTEM STATS
+    # SCHEDULED TASKS
     # ══════════════════════════════════════════════════════════════════
+
+    async def get_scheduled_tasks(self) -> list[dict]:
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await db.execute_fetchall(
+                "SELECT * FROM scheduled_tasks ORDER BY created_at DESC"
+            )
+            return [dict(r) for r in rows]
+
+    async def create_scheduled_task(
+        self,
+        name: str,
+        cron_expression: str,
+        task_title: str,
+        task_description: str | None = None,
+        task_tags: list[str] | None = None,
+        task_area: str | None = None,
+        task_priority: str = "normal",
+        task_project_id: str | None = None,
+        pipeline_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> dict:
+        from croniter import croniter
+        import uuid
+        now = _now()
+        task_id = str(uuid.uuid4())
+        cron = croniter(cron_expression, datetime.now(timezone.utc))
+        next_run = cron.get_next(datetime).isoformat()
+        tags_json = json.dumps(task_tags or [])
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute(
+                """
+                INSERT INTO scheduled_tasks
+                   (id, name, cron_expression, task_title, task_description, task_tags,
+                    task_area, task_priority, task_project_id, pipeline_id, agent_id,
+                    enabled, next_run_at, run_count, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,0,?,?)
+                """,
+                (
+                    task_id, name, cron_expression, task_title, task_description,
+                    tags_json, task_area, task_priority, task_project_id,
+                    pipeline_id, agent_id, next_run, now, now,
+                ),
+            )
+            await db.commit()
+            row = await db.execute_fetchone(
+                "SELECT * FROM scheduled_tasks WHERE id=?", (task_id,)
+            )
+            return dict(row) if row else {}
+
+    async def update_scheduled_task(self, task_id: str, **kwargs: Any) -> dict:
+        kwargs["updated_at"] = _now()
+        if "cron_expression" in kwargs:
+            from croniter import croniter
+            cron = croniter(kwargs["cron_expression"], datetime.now(timezone.utc))
+            kwargs["next_run_at"] = cron.get_next(datetime).isoformat()
+        cols = ", ".join(f"{k}=?" for k in kwargs)
+        vals = list(kwargs.values()) + [task_id]
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute(
+                f"UPDATE scheduled_tasks SET {cols} WHERE id=?", vals
+            )
+            await db.commit()
+            row = await db.execute_fetchone(
+                "SELECT * FROM scheduled_tasks WHERE id=?", (task_id,)
+            )
+            return dict(row) if row else {}
+
+    async def delete_scheduled_task(self, task_id: str) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "DELETE FROM scheduled_tasks WHERE id=?", (task_id,)
+            )
+            await db.commit()
+
+    # ════════════════════════════════════════════════════════════════
+    # SYSTEM STATS
+    # ════════════════════════════════════════════════════════════════
 
     async def get_daily_stats(self) -> dict:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

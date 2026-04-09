@@ -5,6 +5,8 @@ Supported tool categories:
   - MCP tools  — forwarded to the MCP gateway (env MORI_MCP_URL)
   - web_search — SearXNG-backed web search
   - shell      — allow-listed shell commands
+  - browser    — Playwright-based browser automation (requires tools.browser.enabled)
+  - code       — sandboxed Python code execution (requires tools.shell.enabled)
   - builtin    — utility functions (always available)
 
 Tool schemas follow the OpenAI function-calling format so they can be
@@ -18,6 +20,7 @@ import json
 import os
 import shlex
 import subprocess
+import time
 from typing import Any, Optional
 
 import aiohttp
@@ -137,7 +140,206 @@ _BUILTIN_TOOL_SCHEMAS: dict[str, dict] = {
             },
         },
     },
+    "code_execute": {
+        "type": "function",
+        "function": {
+            "name": "code_execute",
+            "description": "Execute Python code in a sandboxed environment and return the output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code to execute.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Execution timeout in seconds (default 30).",
+                        "default": 30,
+                    },
+                },
+                "required": ["code"],
+            },
+        },
+    },
 }
+
+_BROWSER_TOOL_SCHEMAS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_navigate",
+            "description": "Navegar a una URL en el navegador",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "URL a visitar"}},
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_get_text",
+            "description": "Obtener el texto visible de la página actual",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_click",
+            "description": "Hacer click en un elemento CSS selector",
+            "parameters": {
+                "type": "object",
+                "properties": {"selector": {"type": "string"}},
+                "required": ["selector"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_fill",
+            "description": "Rellenar un campo de formulario",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+                "required": ["selector", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_screenshot",
+            "description": "Tomar un screenshot de la página actual",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# BrowserTool
+# ---------------------------------------------------------------------------
+
+
+class BrowserTool:
+    """Playwright-based browser tool. Only active when tools.browser.enabled=True."""
+
+    def __init__(self, config: MoriConfig) -> None:
+        self.config = config
+        self._browser = None
+        self._page = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.config.tools.browser.enabled
+
+    async def _ensure_browser(self) -> None:
+        if self._browser is None:
+            from playwright.async_api import async_playwright
+
+            pw = await async_playwright().start()
+            self._browser = await pw.chromium.launch(
+                headless=self.config.tools.browser.headless
+            )
+        if self._page is None or self._page.is_closed():
+            self._page = await self._browser.new_page()
+
+    async def navigate(self, url: str) -> str:
+        await self._ensure_browser()
+        await self._page.goto(url, wait_until="networkidle", timeout=30000)
+        title = await self._page.title()
+        return f"Navegado a: {url} (título: {title})"
+
+    async def get_text(self) -> str:
+        if not self._page:
+            return "Error: no hay página activa"
+        text = await self._page.inner_text("body")
+        return text[:3000]  # limit
+
+    async def click(self, selector: str) -> str:
+        await self._ensure_browser()
+        await self._page.click(selector, timeout=10000)
+        return f"Click en: {selector}"
+
+    async def fill(self, selector: str, value: str) -> str:
+        await self._ensure_browser()
+        await self._page.fill(selector, value)
+        return f"Relleno: {selector} = {value}"
+
+    async def screenshot(self) -> str:
+        if not self._page:
+            return "Error: no hay página activa"
+        path = f"/tmp/mori_screenshot_{int(time.time())}.png"
+        await self._page.screenshot(path=path)
+        return f"Screenshot guardado: {path}"
+
+    async def evaluate(self, js: str) -> str:
+        await self._ensure_browser()
+        result = await self._page.evaluate(js)
+        return str(result)[:1000]
+
+    async def close(self) -> None:
+        if self._browser:
+            await self._browser.close()
+            self._browser = None
+            self._page = None
+
+
+# ---------------------------------------------------------------------------
+# CodeInterpreter
+# ---------------------------------------------------------------------------
+
+
+class CodeInterpreter:
+    """Sandboxed Python code execution with timeout."""
+
+    def __init__(self, config: MoriConfig) -> None:
+        self.config = config
+
+    @property
+    def enabled(self) -> bool:
+        # Available when shell tool is enabled
+        return self.config.tools.shell.enabled
+
+    async def execute(self, code: str, timeout: int = 30) -> str:
+        """Execute Python code in a restricted environment."""
+        import sys
+        import tempfile
+
+        # Write code to temp file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(code)
+            tmp_path = f.name
+
+        try:
+            proc = await asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    sys.executable,
+                    tmp_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                ),
+                timeout=timeout,
+            )
+            stdout, stderr = await proc.communicate()
+            output = stdout.decode()[:2000]
+            errors = stderr.decode()[:500]
+            if errors:
+                return f"Output:\n{output}\nErrors:\n{errors}"
+            return output or "(sin output)"
+        except asyncio.TimeoutError:
+            return f"Error: timeout después de {timeout}s"
+        except Exception as e:
+            return f"Error: {e}"
+        finally:
+            os.unlink(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +359,8 @@ class ToolManager:
         self.mcp_url = os.environ.get("MORI_MCP_URL", "http://mcp-gateway:18810")
         self._mcp_tools_cache: Optional[list[dict]] = None
         self._session: Optional[aiohttp.ClientSession] = None
+        self.browser_tool = BrowserTool(config)
+        self.code_interpreter = CodeInterpreter(config)
 
     # ------------------------------------------------------------------
     # HTTP session
@@ -173,6 +377,7 @@ class ToolManager:
     async def close(self) -> None:
         if self._session and not self._session.closed:
             await self._session.close()
+        await self.browser_tool.close()
 
     # ------------------------------------------------------------------
     # Schema registry
@@ -183,15 +388,20 @@ class ToolManager:
         Return the OpenAI-compatible tool schemas for the given *tool_ids*.
 
         Recognised IDs:
-          - "web_search"  (requires tools.web_search.enabled)
-          - "shell"       (requires tools.shell.enabled)
-          - "read_file"   (always available)
-          - "write_file"  (always available)
-          - "mcp"         (requires MORI_MCP_URL to be reachable)
+          - "web_search"       (requires tools.web_search.enabled)
+          - "shell"            (requires tools.shell.enabled)
+          - "read_file"        (always available)
+          - "write_file"       (always available)
+          - "mcp"              (requires MORI_MCP_URL to be reachable)
+          - "code_execute"     (requires tools.shell.enabled)
+          - "browser_navigate" / "browser_*"  (requires tools.browser.enabled)
           - Any unknown ID is passed through as a generic mcp-routed tool.
         """
         schemas: list[dict] = []
         seen: set[str] = set()
+
+        # Browser tool IDs (injected when browser is enabled)
+        browser_tool_names = {s["function"]["name"] for s in _BROWSER_TOOL_SCHEMAS}
 
         for tid in tool_ids:
             if tid in seen:
@@ -216,6 +426,23 @@ class ToolManager:
             elif tid == "mcp":
                 schemas.append(_BUILTIN_TOOL_SCHEMAS["mcp"])
 
+            elif tid == "code_execute":
+                if not self.code_interpreter.enabled:
+                    log.debug("tool_disabled", tool=tid)
+                    continue
+                schemas.append(_BUILTIN_TOOL_SCHEMAS["code_execute"])
+
+            elif tid in browser_tool_names:
+                # Skip individual browser tool IDs when browser is disabled
+                if not self.browser_tool.enabled:
+                    log.debug("tool_disabled", tool=tid)
+                    continue
+                # Find matching schema from browser schemas list
+                for s in _BROWSER_TOOL_SCHEMAS:
+                    if s["function"]["name"] == tid:
+                        schemas.append(s)
+                        break
+
             else:
                 # Unknown tool IDs → expose as a generic MCP-routed tool
                 schemas.append(
@@ -237,6 +464,15 @@ class ToolManager:
                         },
                     }
                 )
+
+        # Browser tools (only when enabled) — append ALL browser schemas
+        # if "browser" (wildcard) was listed as a tool ID
+        if "browser" in tool_ids and self.browser_tool.enabled:
+            for s in _BROWSER_TOOL_SCHEMAS:
+                name = s["function"]["name"]
+                if name not in seen:
+                    seen.add(name)
+                    schemas.append(s)
 
         return schemas
 
@@ -302,9 +538,34 @@ class ToolManager:
                 arguments.get("tool_name", ""),
                 arguments.get("arguments", {}),
             )
+        elif name == "code_execute":
+            return await self.code_interpreter.execute(
+                arguments.get("code", ""),
+                arguments.get("timeout", 30),
+            )
+        elif name == "browser_navigate":
+            return await self.browser_tool.navigate(arguments.get("url", ""))
+        elif name == "browser_get_text":
+            return await self.browser_tool.get_text()
+        elif name == "browser_click":
+            return await self.browser_tool.click(arguments.get("selector", ""))
+        elif name == "browser_fill":
+            return await self.browser_tool.fill(
+                arguments.get("selector", ""), arguments.get("value", "")
+            )
+        elif name == "browser_screenshot":
+            return await self.browser_tool.screenshot()
         else:
             # Try MCP gateway for any unknown tool
             return await self._mcp_call(name, arguments)
+
+    # ------------------------------------------------------------------
+    # Shell (public wrapper for testing)
+    # ------------------------------------------------------------------
+
+    async def execute_shell(self, command: str, working_directory: Optional[str] = None) -> str:
+        """Public wrapper around _shell — used by tests and external callers."""
+        return await self._shell(command=command, working_directory=working_directory)
 
     # ------------------------------------------------------------------
     # Web search (SearXNG)

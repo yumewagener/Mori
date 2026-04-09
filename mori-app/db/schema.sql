@@ -167,3 +167,26 @@ CREATE TRIGGER IF NOT EXISTS tasks_fts_delete AFTER DELETE ON tasks BEGIN
     INSERT INTO tasks_fts(tasks_fts, rowid, title, description, tags)
     VALUES ('delete', old.rowid, old.title, old.description, old.tags);
 END;
+
+-- Scheduled tasks (cron-based)
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    cron_expression TEXT NOT NULL,  -- standard 5-field cron: "0 9 * * 1" = Mondays 9am
+    task_title TEXT NOT NULL,
+    task_description TEXT,
+    task_tags TEXT DEFAULT '[]',    -- JSON array
+    task_area TEXT,
+    task_priority TEXT DEFAULT 'normal',
+    task_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    pipeline_id TEXT,
+    agent_id TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,  -- 1=enabled, 0=disabled
+    last_run_at TEXT,
+    next_run_at TEXT NOT NULL,           -- pre-computed, UTC ISO8601
+    run_count INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at, enabled);

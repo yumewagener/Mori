@@ -159,6 +159,47 @@ CREATE TABLE IF NOT EXISTS run_streams (
 );
 
 -- ------------------------------------------------------------------
+-- Memory chunks  (for vector / FTS memory retrieval)
+-- ------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS memory_chunks (
+    id              TEXT PRIMARY KEY,
+    source_type     TEXT NOT NULL
+                    CHECK(source_type IN ('note','decision','task_history','diary')),
+    source_id       TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    embedding       BLOB,
+    embedding_model TEXT,
+    token_count     INTEGER,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- ------------------------------------------------------------------
+-- Scheduled tasks  (cron-based scheduler)
+-- ------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    cron_expression TEXT NOT NULL,
+    task_title      TEXT NOT NULL,
+    task_description TEXT,
+    task_tags       TEXT DEFAULT '[]',
+    task_area       TEXT,
+    task_priority   TEXT DEFAULT 'normal',
+    task_project_id TEXT,
+    pipeline_id     TEXT,
+    agent_id        TEXT,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    last_run_at     TEXT,
+    next_run_at     TEXT NOT NULL,
+    run_count       INTEGER DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at, enabled);
+
+-- ------------------------------------------------------------------
 -- Daily metrics  (aggregated at finish_task time)
 -- ------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS daily_metrics (
@@ -566,3 +607,219 @@ class Database:
             ORDER BY cost_usd DESC
             """
         )
+
+    # ------------------------------------------------------------------
+    # Task creation
+    # ------------------------------------------------------------------
+
+    async def create_task(
+        self,
+        title: str,
+        description: Optional[str] = None,
+        tags: Optional[list] = None,
+        area: Optional[str] = None,
+        priority: str = "media",
+        project_id: Optional[str] = None,
+        pipeline_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> dict:
+        """Create a new task and return its row."""
+        from ulid import ULID
+        task_id = str(ULID())
+        now = _now_iso()
+        tags_json = json.dumps(tags or [])
+        conn = await self._get_conn()
+        await conn.execute(
+            """
+            INSERT INTO tasks
+                (id, title, description, status, priority, area, tags,
+                 project_id, pipeline_id, assigned_agent, created_at, updated_at)
+            VALUES (?, ?, ?, 'pendiente', ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (task_id, title, description, priority, area, tags_json,
+             project_id, pipeline_id, agent_id, now, now),
+        )
+        await conn.commit()
+        row = await self._fetchone("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        return self._decode_tags(row)
+
+    # ------------------------------------------------------------------
+    # Scheduler methods
+    # ------------------------------------------------------------------
+
+    async def get_due_scheduled_tasks(self) -> list[dict]:
+        """Get all scheduled tasks that are due to run."""
+        now = _now_iso()
+        return await self._fetchall(
+            """
+            SELECT * FROM scheduled_tasks
+            WHERE enabled = 1 AND next_run_at <= ?
+            ORDER BY next_run_at
+            """,
+            (now,),
+        )
+
+    async def create_scheduled_task(
+        self,
+        name: str,
+        cron_expression: str,
+        task_title: str,
+        task_description: Optional[str] = None,
+        task_tags: Optional[list] = None,
+        task_area: Optional[str] = None,
+        task_priority: str = "normal",
+        task_project_id: Optional[str] = None,
+        pipeline_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> dict:
+        from croniter import croniter
+        from ulid import ULID
+        task_id = str(ULID())
+        now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = _now_iso()
+        cron = croniter(cron_expression, now_dt)
+        next_run = cron.get_next(datetime).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        tags_json = json.dumps(task_tags or [])
+        conn = await self._get_conn()
+        await conn.execute(
+            """
+            INSERT INTO scheduled_tasks
+               (id, name, cron_expression, task_title, task_description, task_tags,
+                task_area, task_priority, task_project_id, pipeline_id, agent_id,
+                enabled, next_run_at, run_count, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,0,?,?)
+            """,
+            (task_id, name, cron_expression, task_title, task_description,
+             tags_json, task_area, task_priority, task_project_id, pipeline_id,
+             agent_id, next_run, now, now),
+        )
+        await conn.commit()
+        return await self._fetchone("SELECT * FROM scheduled_tasks WHERE id=?", (task_id,))
+
+    async def advance_scheduled_task(self, scheduled_task_id: str) -> None:
+        """Mark a scheduled task as run and compute next_run_at."""
+        from croniter import croniter
+        now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = _now_iso()
+        conn = await self._get_conn()
+        row = await self._fetchone(
+            "SELECT cron_expression FROM scheduled_tasks WHERE id=?",
+            (scheduled_task_id,),
+        )
+        if not row:
+            return
+        cron = croniter(row["cron_expression"], now_dt)
+        next_run = cron.get_next(datetime).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        await conn.execute(
+            """
+            UPDATE scheduled_tasks
+            SET last_run_at=?, next_run_at=?, run_count=run_count+1, updated_at=?
+            WHERE id=?
+            """,
+            (now, next_run, now, scheduled_task_id),
+        )
+        await conn.commit()
+
+    async def get_scheduled_tasks(self) -> list[dict]:
+        return await self._fetchall(
+            "SELECT * FROM scheduled_tasks ORDER BY created_at DESC"
+        )
+
+    async def update_scheduled_task(self, task_id: str, **kwargs) -> Optional[dict]:
+        if not kwargs:
+            return await self._fetchone("SELECT * FROM scheduled_tasks WHERE id=?", (task_id,))
+        from croniter import croniter
+        now = _now_iso()
+        kwargs["updated_at"] = now
+        if "cron_expression" in kwargs:
+            now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+            cron = croniter(kwargs["cron_expression"], now_dt)
+            kwargs["next_run_at"] = cron.get_next(datetime).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        cols = ", ".join(f"{k}=?" for k in kwargs)
+        vals = list(kwargs.values()) + [task_id]
+        conn = await self._get_conn()
+        await conn.execute(
+            f"UPDATE scheduled_tasks SET {cols} WHERE id=?", vals
+        )
+        await conn.commit()
+        return await self._fetchone("SELECT * FROM scheduled_tasks WHERE id=?", (task_id,))
+
+    async def delete_scheduled_task(self, task_id: str) -> None:
+        conn = await self._get_conn()
+        await conn.execute("DELETE FROM scheduled_tasks WHERE id=?", (task_id,))
+        await conn.commit()
+
+    # ------------------------------------------------------------------
+    # Memory / embedding methods
+    # ------------------------------------------------------------------
+
+    async def store_embedding(
+        self,
+        source_type: str,
+        source_id: str,
+        content: str,
+        embedding: list,
+        model: str,
+    ) -> str:
+        """Store a memory chunk with its embedding vector."""
+        import struct
+        from ulid import ULID
+        now = _now_iso()
+        embedding_bytes = struct.pack(f"{len(embedding)}f", *embedding)
+        conn = await self._get_conn()
+        existing = await self._fetchone(
+            "SELECT id FROM memory_chunks WHERE source_type=? AND source_id=?",
+            (source_type, source_id),
+        )
+        if existing:
+            chunk_id = existing["id"]
+            await conn.execute(
+                """
+                UPDATE memory_chunks SET content=?, embedding=?, embedding_model=?,
+                   token_count=?, updated_at=? WHERE id=?
+                """,
+                (content, embedding_bytes, model, len(content.split()), now, chunk_id),
+            )
+        else:
+            chunk_id = str(ULID())
+            await conn.execute(
+                """
+                INSERT INTO memory_chunks
+                    (id, source_type, source_id, content, embedding, embedding_model,
+                     token_count, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (chunk_id, source_type, source_id, content, embedding_bytes,
+                 model, len(content.split()), now, now),
+            )
+        await conn.commit()
+        return chunk_id
+
+    async def get_unembedded_notes(self, limit: int = 50) -> list[dict]:
+        """Get notes that don't have embeddings yet."""
+        return await self._fetchall(
+            """
+            SELECT n.* FROM notes n
+            WHERE NOT EXISTS (
+                SELECT 1 FROM memory_chunks mc
+                WHERE mc.source_type IN ('note','decision') AND mc.source_id = n.id
+            )
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
+    async def get_all_embeddings(self) -> list[dict]:
+        """Get all memory chunks with embeddings for KNN search."""
+        import struct
+        rows = await self._fetchall(
+            "SELECT id, source_type, source_id, content, embedding FROM memory_chunks WHERE embedding IS NOT NULL"
+        )
+        result = []
+        for row in rows:
+            r = dict(row)
+            if r.get("embedding"):
+                n = len(r["embedding"]) // 4
+                r["embedding"] = list(struct.unpack(f"{n}f", r["embedding"]))
+            result.append(r)
+        return result

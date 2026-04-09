@@ -20,6 +20,8 @@ dependencies = [
     "python-ulid>=2.0.0",
     "tenacity>=8.2.0",
     "structlog>=24.0.0",
+    "croniter>=2.0.0",
+    "sqlite-vec>=0.1.0",
 ]
 
 [project.optional-dependencies]

@@ -106,6 +106,100 @@ cmd_ollama() {
     $COMPOSE --profile local-models up -d
 }
 
+cmd_upgrade() {
+    log_info "Checking for updates..."
+    git -C "$MORI_REPO" fetch --quiet
+    local current
+    current=$(git -C "$MORI_REPO" rev-parse HEAD 2>/dev/null)
+    local remote
+    remote=$(git -C "$MORI_REPO" rev-parse "@{u}" 2>/dev/null)
+
+    if [[ "$current" == "$remote" ]]; then
+        log_info "Already up to date ($(git -C "$MORI_REPO" rev-parse --short HEAD))"
+        return
+    fi
+
+    log_info "Pulling updates..."
+    git -C "$MORI_REPO" pull --quiet
+
+    log_info "Rebuilding images..."
+    $COMPOSE build
+
+    log_info "Restarting services..."
+    $COMPOSE up -d
+
+    log_info "Running migrations..."
+    # Apply any new SQL migrations
+    for migration in "$MORI_REPO"/mori-app/db/migrations/*.sql; do
+        [[ -f "$migration" ]] || continue
+        log_info "  Applying: $(basename $migration)"
+        sqlite3 "${MORI_HOME}/data/mori.sqlite3" < "$migration" 2>/dev/null || true
+    done
+
+    log_info "Upgrade complete → $(git -C "$MORI_REPO" rev-parse --short HEAD)"
+}
+
+cmd_doctor() {
+    log_info "Running Mori health check..."
+    local errors=0
+
+    # Docker running?
+    if ! docker info &>/dev/null; then
+        log_error "Docker is not running"
+        ((errors++))
+    else
+        echo -e "  ${GREEN}✓${NC} Docker running"
+    fi
+
+    # Config exists?
+    if [[ ! -f "$MORI_HOME/config/mori.yaml" ]]; then
+        log_error "Missing: $MORI_HOME/config/mori.yaml — run ./mori install"
+        ((errors++))
+    else
+        echo -e "  ${GREEN}✓${NC} Config file exists"
+    fi
+
+    # .env exists?
+    if [[ ! -f "$MORI_HOME/.env" ]]; then
+        log_error "Missing: $MORI_HOME/.env — run ./mori install"
+        ((errors++))
+    else
+        echo -e "  ${GREEN}✓${NC} .env file exists"
+    fi
+
+    # DB writable?
+    local db_dir="$MORI_HOME/data"
+    if [[ ! -d "$db_dir" ]]; then
+        log_error "Missing data directory: $db_dir"
+        ((errors++))
+    else
+        echo -e "  ${GREEN}✓${NC} Data directory exists"
+    fi
+
+    # Services running?
+    local running
+    running=$($COMPOSE ps --status running --quiet 2>/dev/null | wc -l)
+    if [[ "$running" -eq 0 ]]; then
+        log_warn "No services running — use ./mori start"
+    else
+        echo -e "  ${GREEN}✓${NC} $running service(s) running"
+    fi
+
+    # API reachable?
+    if curl -sf "http://localhost:18811/api/health" &>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} API reachable at http://localhost:18811"
+    else
+        log_warn "API not reachable (may not be started yet)"
+    fi
+
+    if [[ "$errors" -eq 0 ]]; then
+        log_info "All checks passed"
+    else
+        log_error "$errors error(s) found"
+        exit 1
+    fi
+}
+
 cmd_help() {
     echo ""
     echo -e "${BLUE}mori${NC} — local multi-model AI orchestrator"
@@ -122,6 +216,8 @@ cmd_help() {
     echo "  update               Pull and rebuild"
     echo "  backup [dir]         Backup SQLite database"
     echo "  ollama               Start with local Ollama models"
+    echo "  upgrade              Pull latest and rebuild"
+    echo "  doctor               Check system health"
     echo ""
 }
 
@@ -136,6 +232,8 @@ case "${1:-help}" in
     update)    cmd_update ;;
     backup)    shift; cmd_backup "$@" ;;
     ollama)    cmd_ollama ;;
+    upgrade)   cmd_upgrade ;;
+    doctor)    cmd_doctor ;;
     help|--help|-h) cmd_help ;;
     *)
         log_error "Unknown command: $1"

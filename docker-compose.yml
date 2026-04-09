@@ -114,6 +114,8 @@ services:
       <<: *common-env
       MORI_CONFIG: /config/mori.yaml
       MORI_MCP_URL: http://mcp-gateway:3000
+      # To enable browser tool: set tools.browser.enabled=true in mori.yaml
+      # Playwright is installed via: playwright install chromium (in Dockerfile)
     networks:
       - mori-net
     depends_on:
