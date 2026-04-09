@@ -11,54 +11,114 @@ orchestrator:
   retry_on_failure: 1
   stream_output: true
   smart_routing: false      # ponlo en true para habilitar routing con LLM
-  routing_model: gemini-flash  # modelo rápido y barato para routing (opcional)
+  routing_model: gemini-3-flash  # modelo rápido y barato para routing (opcional)
 
 # ─────────────────────────────────────────────────────
-# MODELOS — catálogo completo
+# MODELOS — catálogo completo (abril 2026)
 # ─────────────────────────────────────────────────────
 models:
 
-  - id: claude-opus
+  # ── Anthropic Claude 4.x ──────────────────────────
+  - id: claude-opus-4-6
     provider: anthropic
-    model: claude-opus-4-5
+    model: claude-opus-4-6
     api_key_env: ANTHROPIC_API_KEY
-    max_tokens: 200000
+    max_tokens: 1000000
     capabilities: [reasoning, coding, writing, analysis, planning]
     cost_per_1k_input: 0.015
     cost_per_1k_output: 0.075
     supports_tools: true
 
-  - id: claude-sonnet
+  - id: claude-sonnet-4-6
     provider: anthropic
-    model: claude-sonnet-4-5
+    model: claude-sonnet-4-6
     api_key_env: ANTHROPIC_API_KEY
-    max_tokens: 200000
-    capabilities: [coding, writing, analysis]
+    max_tokens: 1000000
+    capabilities: [coding, writing, analysis, reasoning]
     cost_per_1k_input: 0.003
     cost_per_1k_output: 0.015
     supports_tools: true
 
-  - id: gpt-4o
-    provider: openai
-    model: gpt-4o
-    api_key_env: OPENAI_API_KEY
-    capabilities: [reasoning, writing, analysis, vision]
-    supports_tools: true
-
-  - id: gemini-flash
-    provider: google
-    model: gemini-2.0-flash
-    api_key_env: GOOGLE_API_KEY
+  - id: claude-haiku-4-5
+    provider: anthropic
+    model: claude-haiku-4-5
+    api_key_env: ANTHROPIC_API_KEY
+    max_tokens: 200000
     capabilities: [writing, analysis, fast]
-    cost_per_1k_input: 0.0001
+    cost_per_1k_input: 0.0008
+    cost_per_1k_output: 0.004
     supports_tools: true
 
+  # ── OpenAI GPT-5.4 ────────────────────────────────
+  - id: gpt-5-4
+    provider: openai
+    model: gpt-5.4
+    api_key_env: OPENAI_API_KEY
+    max_tokens: 200000
+    capabilities: [reasoning, writing, analysis, vision, coding]
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.015
+    supports_tools: true
+
+  - id: gpt-5-4-mini
+    provider: openai
+    model: gpt-5.4-mini
+    api_key_env: OPENAI_API_KEY
+    max_tokens: 200000
+    capabilities: [writing, analysis, fast]
+    cost_per_1k_input: 0.0004
+    cost_per_1k_output: 0.0016
+    supports_tools: true
+
+  - id: gpt-5-4-nano
+    provider: openai
+    model: gpt-5.4-nano
+    api_key_env: OPENAI_API_KEY
+    max_tokens: 200000
+    capabilities: [fast, writing]
+    cost_per_1k_input: 0.00005
+    cost_per_1k_output: 0.0004
+    supports_tools: true
+
+  # ── Google Gemini 3.x ─────────────────────────────
+  - id: gemini-3-1-pro
+    provider: google
+    model: gemini-3.1-pro-preview
+    api_key_env: GOOGLE_API_KEY
+    max_tokens: 1000000
+    capabilities: [reasoning, writing, analysis, vision, coding]
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+    supports_tools: true
+
+  - id: gemini-3-flash
+    provider: google
+    model: gemini-3-flash
+    api_key_env: GOOGLE_API_KEY
+    max_tokens: 1000000
+    capabilities: [writing, analysis, fast, routing]
+    cost_per_1k_input: 0.0003
+    cost_per_1k_output: 0.0025
+    supports_tools: true
+
+  - id: gemini-3-1-flash-lite
+    provider: google
+    model: gemini-3.1-flash-lite-preview
+    api_key_env: GOOGLE_API_KEY
+    max_tokens: 1000000
+    capabilities: [writing, fast]
+    cost_per_1k_input: 0.00025
+    cost_per_1k_output: 0.0015
+    supports_tools: true
+
+  # ── Ollama (local) ────────────────────────────────
   - id: llama3-local
     provider: ollama
     model: llama3.3:70b
     base_url: http://ollama:11434
     capabilities: [writing, analysis, coding]
     cost_per_1k_input: 0
+    cost_per_1k_output: 0
     supports_tools: false
 
   - id: qwen-coder-local
@@ -67,13 +127,14 @@ models:
     base_url: http://ollama:11434
     capabilities: [coding]
     cost_per_1k_input: 0
+    cost_per_1k_output: 0
     supports_tools: false
 
   # Claude via suscripción Pro/Max (sin API key — usa OAuth del CLI)
   # Requiere: npm install -g @anthropic-ai/claude-code && claude auth login
   - id: claude-max
     provider: claude-cli
-    model: claude-sonnet-4-5          # o claude-opus-4-5 para más capacidad
+    model: claude-sonnet-4-6          # o claude-opus-4-6 para más capacidad
     cli_path: claude                   # ruta al binario (claude debe estar en PATH)
     capabilities: [coding, writing, analysis, reasoning, planning]
     cost_per_1k_input: 0               # cubierto por tu suscripción
@@ -89,7 +150,7 @@ agents:
 
   - id: orchestrator
     name: Orchestrator (Router)
-    model: gemini-flash        # modelo rápido para routing — no necesita ser potente
+    model: gemini-3-flash       # modelo rápido para routing — no necesita ser potente
     role: router
     enabled: true
     system_prompt: |
@@ -109,7 +170,7 @@ agents:
 
   - id: coder
     name: Code Agent
-    model: claude-sonnet
+    model: claude-sonnet-4-6
     fallback_model: qwen-coder-local
     role: executor
     enabled: true
@@ -134,8 +195,8 @@ agents:
 
   - id: researcher
     name: Research Agent
-    model: gpt-4o
-    fallback_model: gemini-flash
+    model: gpt-5-4
+    fallback_model: gemini-3-flash
     role: executor
     enabled: true
     routing:
@@ -155,7 +216,7 @@ agents:
 
   - id: writer
     name: Writer Agent
-    model: gemini-flash
+    model: gemini-3-flash
     fallback_model: llama3-local
     role: executor
     enabled: true
@@ -173,7 +234,7 @@ agents:
   - id: reviewer
     name: Reviewer Agent
     model: llama3-local
-    fallback_model: claude-sonnet
+    fallback_model: claude-sonnet-4-6
     role: reviewer
     enabled: true
     system_prompt: |
@@ -189,7 +250,7 @@ agents:
 
   - id: planner
     name: Planner Agent
-    model: claude-opus
+    model: claude-opus-4-6
     role: planner
     enabled: true
     system_prompt: |
