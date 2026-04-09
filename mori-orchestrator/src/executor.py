@@ -170,6 +170,7 @@ class Executor:
             model_config.cli_path,
             "-p", prompt,
             "--output-format", "stream-json",
+            "--verbose",  # required when using --output-format=stream-json with -p
             "--model", model_config.model,
             "--max-turns", str(turns),
             "--allowedTools", allowed,
