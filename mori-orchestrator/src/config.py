@@ -35,7 +35,7 @@ class OrchestratorConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     id: str
-    provider: Literal["anthropic", "openai", "google", "ollama", "custom"]
+    provider: Literal["anthropic", "openai", "google", "ollama", "custom", "claude-cli"]
     model: str
     api_key_env: Optional[str] = None
     base_url: Optional[str] = None
@@ -44,12 +44,19 @@ class ModelConfig(BaseModel):
     cost_per_1k_input: float = 0.0
     cost_per_1k_output: float = 0.0
     supports_tools: bool = True
+    cli_path: str = "claude"          # path to claude binary
+    allowed_tools: list[str] = ["Read", "Edit", "Bash", "WebSearch", "ListDirectory"]
+    max_turns: int = 20
 
     def get_api_key(self) -> Optional[str]:
         """Resolve API key from environment."""
         if self.api_key_env:
             return os.environ.get(self.api_key_env)
         return None
+
+    @property
+    def is_cli_provider(self) -> bool:
+        return self.provider == "claude-cli"
 
     @property
     def litellm_model_string(self) -> str:

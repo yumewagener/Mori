@@ -67,6 +67,19 @@ models:
     cost_per_1k_input: 0
     supports_tools: false
 
+  # Claude via suscripción Pro/Max (sin API key — usa OAuth del CLI)
+  # Requiere: npm install -g @anthropic-ai/claude-code && claude auth login
+  - id: claude-max
+    provider: claude-cli
+    model: claude-sonnet-4-5          # o claude-opus-4-5 para más capacidad
+    cli_path: claude                   # ruta al binario (claude debe estar en PATH)
+    capabilities: [coding, writing, analysis, reasoning, planning]
+    cost_per_1k_input: 0               # cubierto por tu suscripción
+    cost_per_1k_output: 0
+    supports_tools: false              # Claude Code usa sus propias tools (Read/Edit/Bash)
+    allowed_tools: [Read, Edit, Bash, WebSearch, ListDirectory]
+    max_turns: 20
+
 # ─────────────────────────────────────────────────────
 # AGENTES — roles y configuración
 # ─────────────────────────────────────────────────────
@@ -187,6 +200,23 @@ agents:
       - task_create
       - project_list
     timeout_seconds: 300
+
+  # Agente que usa suscripción Claude (sin coste API)
+  - id: claude-sub
+    name: Claude Subscription Agent
+    model: claude-max
+    fallback_model: llama3-local       # fallback a local si Claude CLI no disponible
+    role: executor
+    enabled: false                     # habilitar tras autenticar el CLI
+    routing:
+      tags: [coding, dev, bug, feature, refactor, analysis, planning]
+      areas: [proyecto, sistema]
+    system_prompt: |
+      Eres un ingeniero y analista experto. Usa las herramientas disponibles
+      para leer el contexto, implementar cambios, y verificar tu trabajo.
+      Sé metódico: lee antes de escribir, verifica después de cambiar.
+    tools: []                          # Claude Code gestiona sus propias tools
+    timeout_seconds: 3600
 
 # ─────────────────────────────────────────────────────
 # PIPELINES — flujos de ejecución multi-paso

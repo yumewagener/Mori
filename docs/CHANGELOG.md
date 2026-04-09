@@ -5,6 +5,30 @@ Format: [version] - date - description
 
 ---
 
+## [2.1.0] - 2026-04-09 — claude-cli provider
+
+### Added
+- **`provider: claude-cli`** — use Claude Code CLI (OAuth) as a model provider
+  - No API key required — uses claude.ai Pro/Max subscription
+  - Calls `claude -p "..."` via subprocess with `--output-format stream-json`
+  - Full agentic loop: Claude Code handles Read/Edit/Bash/WebSearch tools internally
+  - Real-time streaming of Claude's output to Mori UI
+  - `cli_path`, `allowed_tools`, `max_turns` configurable per model in mori.yaml
+  - Graceful error if Claude CLI not installed or not authenticated
+- Orchestrator Dockerfile: Node.js 20 + Claude Code CLI installed at build time
+- docker-compose.yml: mounts `~/.claude` for OAuth session persistence
+- Example `claude-max` model and `claude-sub` agent in mori.yaml.example
+
+### Setup
+```bash
+# Inside the orchestrator container, authenticate once:
+docker exec -it mori-orchestrator-1 claude auth login
+# → opens browser for OAuth flow
+# Then enable the claude-sub agent in mori.yaml and restart
+```
+
+---
+
 ## [2.0.0] - 2026-04-09 — Complete rewrite
 
 ### Added

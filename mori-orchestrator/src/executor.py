@@ -87,6 +87,9 @@ class Executor:
         """
         start = time.monotonic()
         try:
+            model_config = self.model_registry.get_model(agent.model)
+            if model_config.is_cli_provider:
+                return await self._execute_claude_cli(task, agent, context, run_id, max_turns)
             result = await self._execute_with_model(
                 task=task,
                 agent=agent,
@@ -130,6 +133,152 @@ class Executor:
 
         result.duration_seconds = time.monotonic() - start
         return result
+
+    # ------------------------------------------------------------------
+    # Claude CLI execution
+    # ------------------------------------------------------------------
+
+    async def _execute_claude_cli(
+        self,
+        task: dict,
+        agent,
+        context: str,
+        run_id: str,
+        max_turns: int,
+    ) -> "AgentResult":
+        """Execute a task using the Claude Code CLI (OAuth subscription, no API key)."""
+        import json as _json
+        import asyncio as _asyncio
+
+        model_config = self.model_registry.get_model(agent.model)
+
+        # Build prompt
+        prompt_parts = [f"# {task['title']}"]
+        if task.get("description"):
+            prompt_parts.append(task["description"])
+        if context:
+            prompt_parts.append(f"\nCONTEXTO RELEVANTE DEL SISTEMA:\n{context}")
+        if agent.system_prompt:
+            # Prepend system prompt
+            prompt_parts.insert(0, agent.system_prompt + "\n---")
+        prompt = "\n\n".join(prompt_parts)
+
+        # Build command
+        allowed = ",".join(model_config.allowed_tools or ["Read", "Edit", "Bash"])
+        turns = min(max_turns, model_config.max_turns)
+        cmd = [
+            model_config.cli_path,
+            "-p", prompt,
+            "--output-format", "stream-json",
+            "--model", model_config.model,
+            "--max-turns", str(turns),
+            "--allowedTools", allowed,
+            "--no-session-persistence",  # each task is independent
+        ]
+
+        log.info("claude_cli_start", task_id=task["id"], model=model_config.model, turns=turns)
+
+        try:
+            proc = await _asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            return AgentResult(
+                content="",
+                success=False,
+                turns_used=0,
+                error=f"Claude CLI not found at '{model_config.cli_path}'. Install with: npm install -g @anthropic-ai/claude-code",
+            )
+
+        content = ""
+        turns_used = 0
+
+        # Parse the stream-json output line by line
+        try:
+            async for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    event = _json.loads(line)
+                except _json.JSONDecodeError:
+                    # Plain text fallback
+                    if run_id:
+                        await self.stream.push(run_id, line)
+                    content += line + "\n"
+                    continue
+
+                etype = event.get("type", "")
+
+                if etype == "assistant":
+                    # Extract text blocks from message content
+                    for block in event.get("message", {}).get("content", []):
+                        if block.get("type") == "text":
+                            chunk = block["text"]
+                            content += chunk
+                            if run_id:
+                                await self.stream.push(run_id, chunk)
+                        elif block.get("type") == "tool_use":
+                            tool_name = block.get("name", "tool")
+                            tool_input = _json.dumps(block.get("input", {}))[:200]
+                            indicator = f"\n→ {tool_name}({tool_input})\n"
+                            if run_id:
+                                await self.stream.push(run_id, indicator)
+
+                elif etype == "tool_result":
+                    result_content = event.get("content", "")
+                    if isinstance(result_content, list):
+                        result_content = " ".join(
+                            b.get("text", "") for b in result_content if b.get("type") == "text"
+                        )
+                    indicator = f"✓ {str(result_content)[:300]}\n"
+                    if run_id:
+                        await self.stream.push(run_id, indicator)
+
+                elif etype == "result":
+                    turns_used = event.get("num_turns", turns_used)
+                    subtype = event.get("subtype", "")
+                    if subtype == "success":
+                        final = event.get("result", "")
+                        if final and not content.strip():
+                            content = final
+                    elif subtype == "error_max_turns":
+                        log.warning("claude_cli_max_turns", task_id=task["id"])
+                    elif subtype == "error":
+                        error_msg = event.get("error", "unknown error")
+                        await proc.wait()
+                        return AgentResult(
+                            content=content,
+                            success=False,
+                            turns_used=turns_used,
+                            error=error_msg,
+                        )
+
+                elif etype == "system":
+                    # Init messages — ignore
+                    pass
+
+        except Exception as e:
+            log.error("claude_cli_stream_error", error=str(e))
+            await proc.kill()
+            return AgentResult(content=content, success=False, turns_used=turns_used, error=str(e))
+
+        await proc.wait()
+        success = proc.returncode == 0
+
+        if not success:
+            stderr = (await proc.stderr.read()).decode("utf-8", errors="replace")[:500]
+            log.error("claude_cli_failed", returncode=proc.returncode, stderr=stderr)
+
+        log.info("claude_cli_done", task_id=task["id"], turns=turns_used, success=success)
+        return AgentResult(
+            content=content.strip(),
+            success=success,
+            turns_used=turns_used,
+            error=None if success else f"Exit code {proc.returncode}",
+        )
 
     # ------------------------------------------------------------------
     # Internal execution with a specific model

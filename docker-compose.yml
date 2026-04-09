@@ -110,6 +110,7 @@ services:
     volumes:
       - ${MORI_DB_PATH}:/data/mori.sqlite3
       - ${MORI_HOME}/config/mori.yaml:/config/mori.yaml:ro
+      - ${HOME}/.claude:/root/.claude  # Claude Code OAuth session persistence
     environment:
       <<: *common-env
       MORI_CONFIG: /config/mori.yaml

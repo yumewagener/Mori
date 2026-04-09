@@ -83,6 +83,11 @@ class ModelRegistry:
           - api_base   (for Ollama / custom deployments)
           - max_tokens
         """
+        if model.is_cli_provider:
+            raise ValueError(
+                "claude-cli provider does not use LiteLLM. "
+                "Use executor._execute_claude_cli() instead."
+            )
         kwargs: dict = {
             "model": model.litellm_model_string,
             "max_tokens": model.max_tokens,
